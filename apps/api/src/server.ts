@@ -18,7 +18,10 @@ export async function buildServer(
     methods: ["GET", "POST"]
   });
 
-  server.get("/health", async () => options.checkHealth());
+  server.get("/health", async (_request, reply) => {
+    const health = await options.checkHealth();
+    return reply.code(health.status === "ok" ? 200 : 503).send(health);
+  });
 
   return server;
 }

@@ -201,6 +201,52 @@ export async function registerMvpRoutes(
       : toTaskDto(task);
   });
 
+  server.post("/api/tasks/:taskId/cancel", async (request, reply) => {
+    const params = taskParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "INVALID_TASK_ID" });
+    }
+
+    const current = await dependencies.prisma.videoTask.findUnique({
+      where: { id: params.data.taskId }
+    });
+    if (current === null) {
+      return reply.code(404).send({ error: "TASK_NOT_FOUND" });
+    }
+
+    if (
+      current.status === "QUEUED" ||
+      current.status === "SUBMITTING" ||
+      current.status === "PROCESSING"
+    ) {
+      await dependencies.prisma.$transaction(async (transaction) => {
+        const cancelled = await transaction.videoTask.updateMany({
+          where: {
+            id: params.data.taskId,
+            status: { in: ["QUEUED", "SUBMITTING", "PROCESSING"] }
+          },
+          data: {
+            status: "CANCELLED",
+            completedAt: new Date()
+          }
+        });
+        if (cancelled.count === 1) {
+          await transaction.taskEvent.create({
+            data: {
+              taskId: params.data.taskId,
+              fromStatus: current.status,
+              toStatus: "CANCELLED",
+              reason: "USER_CANCELLED"
+            }
+          });
+        }
+      });
+    }
+
+    const task = await findTask(dependencies.prisma, params.data.taskId);
+    return reply.send(toTaskDto(task));
+  });
+
   server.get("/api/tasks/:taskId/video", async (request, reply) =>
     sendVideo(request.params, reply, dependencies, false)
   );

@@ -33,4 +33,24 @@ describe("GET /health", () => {
       services: { api: { status: "up" }, worker: { status: "up" } }
     });
   });
+
+  it("returns 503 when a dependency is degraded", async () => {
+    server = await buildServer({
+      webOrigin: "http://localhost:43170",
+      checkHealth: async () => ({
+        status: "degraded",
+        checkedAt: "2026-07-30T00:00:00.000Z",
+        services: {
+          api: { status: "up" },
+          worker: { status: "down" },
+          postgres: { status: "up" },
+          redis: { status: "up" }
+        }
+      })
+    });
+
+    const response = await server.inject({ method: "GET", url: "/health" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ status: "degraded" });
+  });
 });

@@ -163,13 +163,19 @@ export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
               }))
             });
           }
-          await transaction.videoTask.update({
-            where: { id: taskId },
+          const completed = await transaction.videoTask.updateMany({
+            where: {
+              id: taskId,
+              status: TaskStatus.PROCESSING
+            },
             data: {
               status: TaskStatus.SUCCEEDED,
               completedAt: new Date()
             }
           });
+          if (completed.count !== 1) {
+            throw new TaskNoLongerProcessingError();
+          }
           await transaction.taskEvent.create({
             data: {
               taskId,
@@ -190,6 +196,8 @@ export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
     }
   };
 }
+
+class TaskNoLongerProcessingError extends Error {}
 
 async function transition(
   prisma: PrismaClient,

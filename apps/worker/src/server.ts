@@ -8,9 +8,9 @@ export function buildWorkerServer(
   getHealth: () => WorkerHealth
 ): FastifyInstance {
   const server = Fastify({ logger: true });
-  server.get("/health", async () => {
+  server.get("/health", async (_request, reply) => {
     const health = getHealth();
-    return {
+    const response = {
       status: health.redis === "up" ? "ok" : "degraded",
       checkedAt: new Date().toISOString(),
       services: {
@@ -19,6 +19,7 @@ export function buildWorkerServer(
         provider: { status: "up", name: "mock" }
       }
     };
+    return reply.code(response.status === "ok" ? 200 : 503).send(response);
   });
   return server;
 }

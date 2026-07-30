@@ -25,4 +25,15 @@ describe("Worker GET /health", () => {
       }
     });
   });
+
+  it("returns 503 while Redis is unavailable", async () => {
+    server = buildWorkerServer(() => ({ redis: "down" }));
+    const response = await server.inject({ method: "GET", url: "/health" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: "degraded",
+      services: { redis: { status: "down" } }
+    });
+  });
 });
