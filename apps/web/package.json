@@ -1,0 +1,24 @@
+{
+  "name": "@seedance/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 43170",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 43170",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@seedance/seedance-provider": "workspace:*",
+    "@seedance/shared": "workspace:*",
+    "next": "^15.5.7",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.3"
+  }
+}

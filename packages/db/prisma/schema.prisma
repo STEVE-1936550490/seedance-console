@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  DRAFT
+  QUEUED
+  SUBMITTING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum AssetKind {
+  INPUT_IMAGE
+  OUTPUT_VIDEO
+}
+
+enum AssetRole {
+  REFERENCE_IMAGE
+  GENERATED_VIDEO
+}
+
+model VideoTask {
+  id               String      @id @default(cuid())
+  clientRequestId  String      @unique
+  provider         String      @default("mock")
+  providerTaskId   String?
+  model            String
+  status           TaskStatus  @default(QUEUED)
+  prompt           String
+  parameters       Json
+  progress         Int?
+  errorCode        String?
+  errorMessage     String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  submittedAt      DateTime?
+  completedAt      DateTime?
+  events           TaskEvent[]
+  assets           TaskAsset[]
+  usageRecords     UsageRecord[]
+
+  @@unique([provider, providerTaskId])
+  @@index([status, createdAt])
+}
+
+model Asset {
+  id            String      @id @default(cuid())
+  kind          AssetKind
+  storageKey    String      @unique
+  originalName  String
+  mimeType      String
+  sizeBytes     BigInt
+  checksum      String?
+  createdAt     DateTime    @default(now())
+  tasks         TaskAsset[]
+}
+
+model TaskAsset {
+  taskId     String
+  assetId    String
+  role       AssetRole
+  position   Int       @default(0)
+  task       VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  asset      Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, assetId, role])
+  @@index([taskId, role, position])
+}
+
+model TaskEvent {
+  id          String      @id @default(cuid())
+  taskId      String
+  fromStatus  TaskStatus?
+  toStatus    TaskStatus
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  task        VideoTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+model UsageRecord {
+  id          String    @id @default(cuid())
+  taskId      String
+  provider    String
+  metric      String
+  quantity    Decimal   @db.Decimal(20, 6)
+  unit        String
+  raw         Json?
+  recordedAt  DateTime  @default(now())
+  task        VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, recordedAt])
+}

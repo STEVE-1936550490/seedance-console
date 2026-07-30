@@ -1,0 +1,27 @@
+{
+  "name": "@seedance/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "@seedance/config": "workspace:*",
+    "@seedance/db": "workspace:*",
+    "@seedance/seedance-provider": "workspace:*",
+    "@seedance/shared": "workspace:*",
+    "@seedance/storage": "workspace:*",
+    "bullmq": "^5.61.0",
+    "fastify": "^5.6.1",
+    "ioredis": "^5.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.6"
+  }
+}

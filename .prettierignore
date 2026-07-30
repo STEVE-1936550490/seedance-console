@@ -1,0 +1,7 @@
+.next
+coverage
+dist
+node_modules
+pnpm-lock.yaml
+pythonSDK-0515.zip
+packages/db/src/generated

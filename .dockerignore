@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.env
+.env.*
+!.env.example
+**/.next
+**/coverage
+**/dist
+**/node_modules
+storage
+tmp
+*.log
+pythonSDK-*.zip

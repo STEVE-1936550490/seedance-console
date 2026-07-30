@@ -1,0 +1,176 @@
+name: seedance-console
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-seedance}:${POSTGRES_PASSWORD:-seedance-local-only}@postgres:5432/${POSTGRES_DB:-seedance_console}?schema=public
+  REDIS_URL: redis://redis:6379
+  STORAGE_ROOT: /data/storage
+  SEEDANCE_PROVIDER_DRIVER: mock
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-seedance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seedance-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-seedance_console}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-45432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-46379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  storage-init:
+    build:
+      context: .
+      target: api
+    user: "0:0"
+    command:
+      ["sh", "-c", "mkdir -p /data/storage && chown -R 1000:1000 /data/storage"]
+    volumes:
+      - app-storage:/data/storage
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      target: api
+    environment:
+      <<: *app-environment
+    command:
+      [
+        "node",
+        "packages/db/node_modules/prisma/build/index.js",
+        "migrate",
+        "deploy",
+        "--schema",
+        "packages/db/prisma/schema.prisma"
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      API_HOST: 0.0.0.0
+      API_PORT: 43171
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:43170}
+      WORKER_HEARTBEAT_KEY: seedance:worker:heartbeat
+      WORKER_HEARTBEAT_TTL_SECONDS: 15
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-10485760}
+    ports:
+      - "127.0.0.1:${API_PORT:-43171}:43171"
+    volumes:
+      - app-storage:/data/storage
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:43171/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      WORKER_HOST: 0.0.0.0
+      WORKER_PORT: 43172
+      WORKER_HEARTBEAT_KEY: seedance:worker:heartbeat
+      WORKER_HEARTBEAT_TTL_SECONDS: 15
+    ports:
+      - "127.0.0.1:${WORKER_PORT:-43172}:43172"
+    volumes:
+      - app-storage:/data/storage
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:43172/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:43171
+    ports:
+      - "${WEB_PORT:-43170}:43170"
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:43170').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:
+  app-storage:
