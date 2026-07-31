@@ -23,6 +23,9 @@ describe("MockSeedanceProvider", () => {
     const created = await provider.createTask(input);
     const duplicate = await provider.createTask(input);
     expect(duplicate.providerTaskId).toBe(created.providerTaskId);
+    await expect(provider.recoverTask(input.clientRequestId)).resolves.toBe(
+      created.providerTaskId
+    );
     expect((await provider.getTask(created.providerTaskId)).status).toBe(
       "PROCESSING"
     );

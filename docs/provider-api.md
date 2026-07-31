@@ -5,15 +5,14 @@
 本文根据以下本地材料静态整理，未安装、导入或执行 SDK，也未向移动云发起请求：
 
 - 根目录 `pythonSDK-0515.zip`
-- `maas_seedance_sdk-1.0.0-py3-none-any.whl`
+- ZIP 内的 `maas_seedance_sdk-1.0.0-py3-none-any.whl`
 - ZIP 中的 `maas_seedance_demo.py`
-- 用户提供的 Python 示例
 
 SDK 元数据确认包名为 `maas_seedance_sdk`、版本 `1.0.0`、要求 Python `>=3.8`。本文将信息分为：
 
 - **已由 SDK 源码确认**：方法、路径、请求头和源码直接读取的响应字段。
 - **仅由示例确认**：示例出现过，但合法取值、边界和默认值仍未知。
-- **待用户/官方补充**：不能从 SDK 安全推断，真实适配器实现前必须填写。
+- **`TODO_CONFIRM`**：不能从 SDK 安全推断，真实适配器实现前必须由官方文档、平台页面或脱敏接口样例确认。
 
 源码行为不等同于完整官方协议。官方文档与实际测试结果优先级更高。
 
@@ -27,30 +26,31 @@ maas_seedance_sdk-1.0.0-py3-none-any.whl
 SHA-256 36f86be4d97400c1964eba0a0f9b845e047e8430499ae42990cb98cb9d961039
 ```
 
-## 2. 推荐的双调用架构
+## 2. 候选调用边界（尚未选型）
 
 ```text
 TypeScript Worker
   └─ SeedanceProvider
        ├─ mock        -> MockSeedanceProvider
-       ├─ maas-sdk    -> 内网 Python Provider Bridge -> maas_seedance SDK -> 移动云
-       └─ direct-http -> TypeScript HTTP Transport   -> 移动云（待协议确认）
+       └─ seedance
+            ├─ TypeScript HTTP Transport -> 移动云（优先，待官方协议确认）
+            └─ 内网 Python Provider Bridge -> maas_seedance SDK -> 移动云（仅在 SDK 必需时）
 ```
 
-推荐生产机密模型使用 `maas-sdk`：
+P1 不决定真实 Provider 的 transport。P2 应遵循：
 
-- SDK 是 Python 包，而主项目是 TypeScript，因此用独立 Python Bridge 封装 SDK。
-- Bridge 只监听 Docker 内部网络，不向浏览器或公网发布。
-- Worker 与 Bridge 交换规范化任务 DTO；API Key、RSA 私钥和 SDK 原始响应不离开 Bridge。
-- 使用常驻进程复用 SDK 客户端，不为每次轮询启动 Python 子进程。
+- 若官方确认 TypeScript 可以完整实现鉴权、AICC/机密通道、创建、查询和下载，则优先在现有 TypeScript Provider Adapter 内实现。
+- 只有官方确认真实 API 必须通过当前 Python SDK，或未提供可兼容实现的机密通道协议时，才引入私有 Python Provider Bridge。
+- 若使用 Bridge，它只能监听 Docker 内部网络，不能向浏览器或公网发布；API Key、RSA 私钥和 SDK 原始响应不能离开 Bridge。
+- 不论 transport 如何选择，API、Worker 业务状态、数据库和前端只使用内部 Provider DTO。
 
-保留 `direct-http` 传输，但当前必须标记为 **不可用/实验性**。静态源码显示 SDK 会执行远程证明并加密请求与响应；在官方提供无 SDK 调用协议或确认普通 HTTP 可用前，不能仅照抄 URL 和 Bearer Header。
+当前两种真实 transport 都是 **不可实现/待确认** 状态。静态源码显示 SDK 会执行远程证明并加密请求与响应；在官方提供无 SDK 调用协议或确认普通 HTTP 可用前，不能仅照抄 URL 和 Bearer Header。
 
 ## 3. 配置及实际 API Key 填写位置
 
 不要把真实值写进本文、Git、TypeScript 源码、Next.js 环境变量或任何 `NEXT_PUBLIC_*` 变量。
 
-后续部署时请在服务器创建：
+如果 P2 最终确认必须使用 Python SDK，后续部署可在服务器创建独立的 SDK 配置文件：
 
 ```text
 /etc/seedance-console/provider.env
@@ -68,7 +68,7 @@ MAAS_PUBLIC_KEY_PATH=/var/lib/seedance-console/keys/seedance_pub.pem
 MAAS_PRIVATE_KEY_PATH=/var/lib/seedance-console/keys/seedance_priv.pem
 ```
 
-该文件权限应为 `0600`，只注入 Python Provider Bridge；不要注入 `web` 或 `api` 容器。未来选择 `direct-http` 时，密钥只注入 Worker。Docker Compose 文件创建后应显式引用这个外部 `env_file`，而不是把密钥复制进仓库。
+这些是 SDK 构造器字段的参考映射，不是最终应用环境变量契约；P2/P3 仍应按项目统一的 `SEEDANCE_*` 配置设计。该文件权限应为 `0600`，只注入 Python Provider Bridge；不要注入 `web` 或 `api` 容器。若最终选择 TypeScript transport，密钥只注入 Worker。Docker Compose 文件创建后应显式引用外部 `env_file`，而不是把密钥复制进仓库。
 
 密钥目录必须提前创建并持久化。SDK 在任一 PEM 文件缺失时会生成一对 RSA 4096 密钥，但不会创建父目录；私钥权限应为 `0600`。生产环境不要使用示例的相对 `./tmp` 路径。
 
@@ -265,7 +265,7 @@ Bridge 集成时应额外实施：
 - 使用服务生成的临时路径；SDK 拒绝覆盖已有非空文件。
 - 成功解密和校验后再写入最终 Storage。
 
-## 10. SDK 与无 SDK Provider 的统一能力
+## 10. SDK 与无 SDK 候选 transport 的能力差异
 
 `SeedanceProvider` 上层契约保持不变，底层 transport 可替换：
 
@@ -279,56 +279,52 @@ Bridge 集成时应额外实施：
 | 取消           | 未确认       | 未确认                         |
 | 用量           | 未发现       | 未确认                         |
 
-选择 transport 的配置值为 `mock`、`maas-sdk` 或 `direct-http`。当选择尚不可用的 `direct-http` 时，服务必须启动失败并提示缺少协议配置，不能静默降级到明文请求。
+应用层 Provider 只应暴露 `mock` 与 `seedance`；`seedance` 内部采用 TypeScript transport 还是 Python SDK Bridge，留待 P2 在协议确认后设计。任何 transport 缺少完整协议或安全配置时都必须启动失败，不能静默降级到明文请求。
 
-## 11. 请你补充的具体位置
+## 11. 真实 Provider 协议确认矩阵
 
-请直接编辑本节；未知项可先保留 `TODO`。不要填写真实 API Key。
+本节是实现真实 Provider 前的阻断清单。“示例确认”只表示字段或值出现在附带 demo 中，不代表生产环境、完整枚举、默认值或限制已经获得官方保证。
 
-### 11.1 官方协议与环境
+| #   | 必须确认项                                 | 当前可确认信息                                                                                                                     | 尚缺信息                                                                                                                                        |
+| --- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | API Base URL                               | demo 使用 `https://zhenze-huhehaote.cmecloud.cn/api/v3`；SDK 业务路径相对此地址拼接。                                              | `TODO_CONFIRM` 测试与生产 Base URL、区域差异、API 版本、是否要求固定出口 IP/代理/自定义 CA。                                                    |
+| 2   | 鉴权方式                                   | SDK 源码构造 `Authorization: Bearer <MAAS_API_KEY>` 和 JSON 请求；机密模式还执行远程证明与消息体加密。                             | `TODO_CONFIRM` Key 创建/权限/轮换/过期规则，是否还有租户、项目或签名 Header，无 SDK 调用是否受支持。                                            |
+| 3   | 实际模型 ID                                | demo 传入 `doubao-seedance-2.0`，SDK 再调用 `/mapping/query` 获取 endpoint。                                                       | `TODO_CONFIRM` 当前账号实际开通的模型 ID、endpoint 映射结果、模型版本与退役策略。示例值不得直接视为生产可用模型。                               |
+| 4   | 创建视频任务接口                           | SDK 源码使用 `POST /contents/generations/tasks`；HTTP 200 时读取响应 `id`。                                                        | `TODO_CONFIRM` 正式请求 schema、成功 HTTP 状态全集、响应完整 schema 和任务 ID 约束。                                                            |
+| 5   | 查询任务接口                               | SDK 源码使用 `GET /contents/generations/tasks/{task_id}`。                                                                         | `TODO_CONFIRM` 正式响应 schema、404/过期语义、允许轮询频率和任务最长保留时间。                                                                  |
+| 6   | 取消任务接口是否存在                       | SDK 提供 `DELETE /contents/generations/tasks/{task_id}`，方法名语义是删除。                                                        | `TODO_CONFIRM` 是否支持取消正在生成的任务、DELETE 是删除记录还是取消计算、允许调用状态、重复调用语义。                                          |
+| 7   | 图片/视频/音频素材如何提交                 | demo 的 `content` 使用 `image_url`、`video_url`、`audio_url`，角色分别为 `reference_image`、`reference_video`、`reference_audio`。 | `TODO_CONFIRM` 各素材类型是否都正式支持、数量/顺序/组合规则、URL 可访问性和生命周期要求。                                                       |
+| 8   | 素材使用 URL、Base64、`file_id` 或上传接口 | 现有 demo 只展示 URL。SDK 公共方法中未发现独立素材上传方法。                                                                       | `TODO_CONFIRM` 是否支持 Base64、`file_id`、multipart 或独立上传接口，私有对象存储如何授权。                                                     |
+| 9   | 文件格式和大小限制                         | 现有材料没有完整限制。                                                                                                             | `TODO_CONFIRM` 图片/视频/音频的 MIME、扩展名、字节数、分辨率、时长、编码、声道和数量限制。                                                      |
+| 10  | 文生视频和图生视频请求参数                 | demo 展示文本项以及文本与多种参考素材组合；`content` 中的文本项使用 `{"type":"text","text":"..."}`。                               | `TODO_CONFIRM` 纯文本最小请求、图生视频最小请求、必填字段、首尾帧/参考图角色、提示词长度和组合互斥规则。                                        |
+| 11  | 分辨率、比例、时长、帧率范围               | demo 只展示 `ratio: "16:9"`、`duration: 11`；未展示分辨率和帧率字段。                                                              | `TODO_CONFIRM` `ratio`、分辨率、`duration`、帧率的字段名、类型、单位、枚举/范围、默认值和模型相关限制；`generate_audio`、`watermark` 也需确认。 |
+| 12  | 服务商完整任务状态集合                     | SDK/示例源码出现 `pending`、`queued`、`running`、`succeeded`、`failed`。                                                           | `TODO_CONFIRM` 完整枚举、大小写、每个状态是否终态、取消/过期/审核状态、未知状态处理要求。                                                       |
+| 13  | 成功返回结构                               | 创建成功源码读取顶层 `id`；查询成功示例读取 `status`，下载逻辑读取 `content.video_url`。                                           | `TODO_CONFIRM` 创建和查询的完整脱敏 JSON 样例、输出数组/单对象语义、媒体元数据、完成时间、校验和。                                              |
+| 14  | 失败返回结构                               | 示例查询可能读取顶层 `error`，但类型和层级未确认；SDK 非 200 行为不统一。                                                          | `TODO_CONFIRM` 创建/查询/下载失败的脱敏 JSON、HTTP 状态、业务码、消息、request ID 和可重试标志。                                                |
+| 15  | 错误码                                     | 现有材料没有正式错误码表。                                                                                                         | `TODO_CONFIRM` 鉴权、参数、素材、审核、配额、限流、服务故障、任务不存在和下载失败的完整错误码。                                                 |
+| 16  | 429 和 5xx 重试规则                        | 现有材料没有官方规则。                                                                                                             | `TODO_CONFIRM` 哪些操作可重试、`Retry-After`/限流 Header、退避上限、最大次数；创建任务结果不明时禁止盲目重发。                                  |
+| 17  | 幂等键                                     | 现有材料未发现幂等 Header 或按客户端请求 ID 查询能力。                                                                             | `TODO_CONFIRM` 创建是否支持幂等键、键名/格式/有效期/冲突语义，以及超时后如何确认创建结果。                                                      |
+| 18  | Webhook                                    | SDK 公共方法和 demo 未展示 Webhook。                                                                                               | `TODO_CONFIRM` 是否支持回调、注册方式、签名验证、重放防护、事件类型、重试与顺序保证。                                                           |
+| 19  | 视频下载是否需要鉴权                       | SDK 下载逻辑对 `content.video_url` 发起流式 GET；静态源码未见显式附加业务 API Authorization。                                      | `TODO_CONFIRM` URL 是否自带签名、是否还需 Header/Cookie、允许 host、重定向规则、机密视频解密前置条件。                                          |
+| 20  | 视频 URL 有效期                            | 现有材料未说明。                                                                                                                   | `TODO_CONFIRM` URL TTL、起算时间、能否刷新、任务记录保留时间和过期后的恢复方式。                                                                |
+| 21  | Token、用量和费用字段                      | 现有 SDK/示例未发现可确认的进度、Token、用量或费用字段。                                                                           | `TODO_CONFIRM` 字段路径、单位、精度、币种、税费、预估/实付语义、何时最终确定以及缺失语义。                                                      |
+| 22  | 请求并发和限流                             | 现有材料未说明。                                                                                                                   | `TODO_CONFIRM` 账号/模型/区域的 QPS、并发任务数、队列上限、日/月配额、限流响应 Header。                                                         |
+| 23  | 内容审核失败返回方式                       | 现有材料未展示内容审核响应。                                                                                                       | `TODO_CONFIRM` 审核发生阶段、状态或错误码、可展示消息、是否计费、是否允许修改后重试。                                                           |
+| 24  | AICC/机密计算环境                          | SDK 源码请求 `/v1/security/token`，并设置 `X-AICC-Encryption-*` Header 后加密消息体；生成视频还可请求文件加密。                    | `TODO_CONFIRM` 官方对 AICC/机密计算的数据流说明、覆盖范围、是否强制、证明验证要求、数据驻留/保留策略和合规材料。                                |
+| 25  | 取消后的最终状态语义                       | 内部系统已有 `CANCELLED`，但 SDK 只有语义未明的 DELETE。                                                                           | `TODO_CONFIRM` Provider 取消成功/受理/冲突响应，最终状态名、竞态处理、是否计费、输出是否保留、删除与取消的关系。                                |
 
-- 官方文档版本/日期：`TODO`
-- 测试环境 Base URL：`TODO`
-- 生产环境 Base URL：`TODO`
-- 无 SDK 是否被官方支持：`TODO（是/否）`
-- 若支持，无 SDK 的机密通道协议或官方库：`TODO（文档或文件位置）`
-- 是否要求固定出口 IP、代理或证书：`TODO`
+## 12. 补充运维协议
 
-### 11.2 创建参数约束
+以下信息同样不能从当前业务样例安全推断：
 
-- 文本长度限制：`TODO`
-- `content` 支持类型、角色、数量和顺序：`TODO`
-- 素材 URL 可访问性/签名 URL 要求：`TODO`
-- 图片格式、大小、分辨率：`TODO`
-- 参考视频格式、大小、时长：`TODO`
-- 参考音频格式、大小、时长：`TODO`
-- `ratio` 完整枚举：`TODO`
-- `duration` 单位、范围与枚举：`TODO`
-- `generate_audio` 默认值与限制：`TODO`
-- `watermark` 默认值与限制：`TODO`
-- 其他必填/可选字段：`TODO`
+- SDK/ZIP 是否允许纳入私有镜像或私有制品库：`TODO_CONFIRM`
+- SDK 官方下载、更新、签名和校验渠道：`TODO_CONFIRM`
+- 除元数据中的 Python `>=3.8` 外，官方支持的 Python 版本、操作系统和 CPU 架构：`TODO_CONFIRM`
+- SDK 日志是否可关闭、调整级别或配置脱敏：`TODO_CONFIRM`
+- 推荐轮询间隔、单任务最长处理时间和任务保留时间：`TODO_CONFIRM`
+- SDK/服务端超时建议，以及代理、DNS、TLS 和证书要求：`TODO_CONFIRM`
 
-### 11.3 响应、状态与错误
-
-- 创建成功的脱敏响应样例：`TODO`
-- 查询处理中/成功/失败的脱敏响应样例：`TODO`
-- 状态完整枚举及含义：`TODO`
-- HTTP 错误码和业务错误结构：`TODO`
-- 限流 Header、配额和安全重试规则：`TODO`
-- 是否支持幂等键或按客户端 ID 查询：`TODO`
-- 删除是否等同于取消，允许在哪些状态调用：`TODO`
-- 输出 URL 有效期、下载鉴权和允许 host：`TODO`
-- 是否返回进度、用量、token 或计费单位：`TODO`
-
-### 11.4 SDK 运维信息
-
-- SDK/ZIP 是否允许纳入私有镜像或私有制品库：`TODO`
-- SDK 更新和校验渠道：`TODO`
-- 官方支持的 Python 版本与操作系统/架构：`TODO`
-- SDK 日志是否可关闭或配置脱敏：`TODO`
-- 推荐轮询间隔、任务最长处理时间：`TODO`
-
-## 12. 已知 SDK 集成风险
+## 13. 已知 SDK 集成风险
 
 - SDK 初始化的模型映射请求会记录响应正文。
 - 创建方法会记录完整请求体，可能包含提示词和素材 URL。

@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 
 import { loadApiConfig, loadLocalEnvironment } from "@seedance/config";
 import { prisma } from "@seedance/db";
-import { MockSeedanceProvider } from "@seedance/seedance-provider";
+import { createProviderDefinition } from "@seedance/seedance-provider";
 import { videoQueueName, type VideoGenerationJob } from "@seedance/shared";
 import { LocalStorage } from "@seedance/storage";
 import { Queue } from "bullmq";
@@ -37,7 +37,13 @@ queueConnection.on("error", () => undefined);
 const taskQueue = new Queue<VideoGenerationJob>(videoQueueName, {
   connection: queueConnection
 });
-const provider = new MockSeedanceProvider();
+const provider =
+  config.SEEDANCE_PROVIDER === "mock"
+    ? createProviderDefinition({ provider: "mock" })
+    : createProviderDefinition({
+        provider: "seedance",
+        modelId: requireSeedanceModelId(config.SEEDANCE_MODEL_ID)
+      });
 const storage = new LocalStorage(resolve(process.cwd(), config.STORAGE_ROOT));
 
 await registerMvpRoutes(server, {
@@ -63,3 +69,12 @@ process.once("SIGTERM", () => {
 });
 
 await server.listen({ host: config.API_HOST, port: config.API_PORT });
+
+function requireSeedanceModelId(value: string | undefined): string {
+  if (value === undefined) {
+    throw new Error(
+      "SEEDANCE_MODEL_ID is required when SEEDANCE_PROVIDER=seedance."
+    );
+  }
+  return value;
+}

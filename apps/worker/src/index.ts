@@ -13,6 +13,11 @@ import { createTaskProcessor } from "./task-processor.js";
 
 loadLocalEnvironment();
 const config = loadWorkerConfig();
+if (config.SEEDANCE_PROVIDER !== "mock") {
+  throw new Error(
+    "Real Seedance runtime remains disabled until the private Bridge and asset publishing flow are implemented."
+  );
+}
 const provider = new MockSeedanceProvider();
 const storage = new LocalStorage(resolve(process.cwd(), config.STORAGE_ROOT));
 const processTask = createTaskProcessor({ prisma, provider, storage });

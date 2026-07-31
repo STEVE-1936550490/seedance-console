@@ -5,7 +5,6 @@ x-app-environment: &app-environment
   DATABASE_URL: postgresql://${POSTGRES_USER:-seedance}:${POSTGRES_PASSWORD:-seedance-local-only}@postgres:5432/${POSTGRES_DB:-seedance_console}?schema=public
   REDIS_URL: redis://redis:6379
   STORAGE_ROOT: /data/storage
-  SEEDANCE_PROVIDER_DRIVER: mock
 
 services:
   postgres:
@@ -83,6 +82,8 @@ services:
       WORKER_HEARTBEAT_KEY: seedance:worker:heartbeat
       WORKER_HEARTBEAT_TTL_SECONDS: 15
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-10485760}
+      SEEDANCE_PROVIDER: ${SEEDANCE_PROVIDER:-mock}
+      SEEDANCE_MODEL_ID: ${SEEDANCE_MODEL_ID:-}
     ports:
       - "127.0.0.1:${API_PORT:-43171}:43171"
     volumes:
@@ -118,6 +119,15 @@ services:
       WORKER_PORT: 43172
       WORKER_HEARTBEAT_KEY: seedance:worker:heartbeat
       WORKER_HEARTBEAT_TTL_SECONDS: 15
+      SEEDANCE_PROVIDER: ${SEEDANCE_PROVIDER:-mock}
+      SEEDANCE_MODEL_ID: ${SEEDANCE_MODEL_ID:-}
+      SEEDANCE_REQUEST_TIMEOUT_MS: ${SEEDANCE_REQUEST_TIMEOUT_MS:-}
+      SEEDANCE_POLL_INTERVAL_MS: ${SEEDANCE_POLL_INTERVAL_MS:-}
+      SEEDANCE_MAX_POLL_DURATION_MS: ${SEEDANCE_MAX_POLL_DURATION_MS:-}
+      SEEDANCE_DOWNLOAD_TIMEOUT_MS: ${SEEDANCE_DOWNLOAD_TIMEOUT_MS:-}
+      SEEDANCE_BRIDGE_URL: ${SEEDANCE_BRIDGE_URL:-}
+      SEEDANCE_BRIDGE_TOKEN: ${SEEDANCE_BRIDGE_TOKEN:-}
+      REAL_API_TEST: ${REAL_API_TEST:-false}
     ports:
       - "127.0.0.1:${WORKER_PORT:-43172}:43172"
     volumes:

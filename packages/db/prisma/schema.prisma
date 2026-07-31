@@ -28,6 +28,12 @@ enum AssetRole {
   GENERATED_VIDEO
 }
 
+enum ProviderSubmissionStatus {
+  ATTEMPTING
+  ACCEPTED
+  OUTCOME_UNKNOWN
+}
+
 model VideoTask {
   id               String      @id @default(cuid())
   clientRequestId  String      @unique
@@ -47,9 +53,28 @@ model VideoTask {
   events           TaskEvent[]
   assets           TaskAsset[]
   usageRecords     UsageRecord[]
+  submission       ProviderSubmission?
 
   @@unique([provider, providerTaskId])
   @@index([status, createdAt])
+}
+
+model ProviderSubmission {
+  id               String                   @id @default(cuid())
+  taskId           String                   @unique
+  provider         String
+  clientRequestId  String
+  providerTaskId   String?
+  status           ProviderSubmissionStatus @default(ATTEMPTING)
+  errorCode        String?
+  startedAt        DateTime                 @default(now())
+  acceptedAt       DateTime?
+  updatedAt        DateTime                 @updatedAt
+  task             VideoTask                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, clientRequestId])
+  @@unique([provider, providerTaskId])
+  @@index([status, updatedAt])
 }
 
 model Asset {

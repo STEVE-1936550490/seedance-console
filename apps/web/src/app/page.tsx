@@ -384,11 +384,20 @@ function DynamicParameter({
       <label htmlFor={`parameter-${definition.key}`}>{definition.label}</label>
       <select
         id={`parameter-${definition.key}`}
-        value={typeof value === "string" ? value : definition.defaultValue}
-        onChange={(event) => onChange(event.target.value)}
+        value={
+          typeof value === "string" || typeof value === "number"
+            ? String(value)
+            : String(definition.defaultValue)
+        }
+        onChange={(event) => {
+          const option = definition.options.find(
+            (item) => String(item.value) === event.target.value
+          );
+          onChange(option?.value ?? definition.defaultValue);
+        }}
       >
         {definition.options.map((option) => (
-          <option key={option.value} value={option.value}>
+          <option key={String(option.value)} value={String(option.value)}>
             {option.label}
           </option>
         ))}

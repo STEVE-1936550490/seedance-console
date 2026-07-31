@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "FIXTURE_RATE_LIMITED",
+    "message": "Fixture Bridge rate limit exceeded.",
+    "operation": "GET",
+    "retry": "SAFE_READ",
+    "retryAfterMs": 2000,
+    "requestId": "fixture-request-id"
+  }
+}

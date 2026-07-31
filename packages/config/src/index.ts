@@ -4,6 +4,25 @@ import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
 const nodeEnvironmentSchema = z.enum(["development", "test", "production"]);
+const providerNameSchema = z.enum(["mock", "seedance"]);
+
+const optionalString = z.preprocess(
+  emptyStringToUndefined,
+  z.string().trim().min(1).optional()
+);
+const optionalUrl = z.preprocess(
+  emptyStringToUndefined,
+  z.string().url().optional()
+);
+const optionalPositiveInteger = z.preprocess(
+  emptyStringToUndefined,
+  z.coerce.number().int().positive().optional()
+);
+const booleanWithFalseDefault = z.preprocess((value) => {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
+}, z.boolean().default(false));
 
 const commonSchema = z.object({
   NODE_ENV: nodeEnvironmentSchema.default("development"),
@@ -19,25 +38,71 @@ const commonSchema = z.object({
   WORKER_HEARTBEAT_TTL_SECONDS: z.coerce.number().int().min(5).default(15)
 });
 
-const apiSchema = commonSchema.extend({
-  API_HOST: z.string().min(1).default("127.0.0.1"),
-  API_PORT: z.coerce.number().int().min(1).max(65535).default(43171),
-  WEB_ORIGIN: z.string().url().default("http://localhost:43170"),
-  UPLOAD_MAX_BYTES: z.coerce
-    .number()
-    .int()
-    .min(1_024)
-    .default(10 * 1024 * 1024)
-});
+const providerDefinitionFields = {
+  SEEDANCE_PROVIDER: providerNameSchema.default("mock"),
+  SEEDANCE_MODEL_ID: optionalString
+};
 
-const workerSchema = commonSchema.extend({
-  WORKER_HOST: z.string().min(1).default("127.0.0.1"),
-  WORKER_PORT: z.coerce.number().int().min(1).max(65535).default(43172),
-  SEEDANCE_PROVIDER_DRIVER: z.literal("mock").default("mock")
+const apiSchema = z
+  .object({
+    ...commonSchema.shape,
+    ...providerDefinitionFields,
+    API_HOST: z.string().min(1).default("127.0.0.1"),
+    API_PORT: z.coerce.number().int().min(1).max(65535).default(43171),
+    WEB_ORIGIN: z.string().url().default("http://localhost:43170"),
+    UPLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .default(10 * 1024 * 1024)
+  })
+  .superRefine(requireSeedanceDefinition);
+
+const workerSchema = z
+  .object({
+    ...commonSchema.shape,
+    ...providerDefinitionFields,
+    WORKER_HOST: z.string().min(1).default("127.0.0.1"),
+    WORKER_PORT: z.coerce.number().int().min(1).max(65535).default(43172),
+    SEEDANCE_REQUEST_TIMEOUT_MS: optionalPositiveInteger,
+    SEEDANCE_POLL_INTERVAL_MS: optionalPositiveInteger,
+    SEEDANCE_MAX_POLL_DURATION_MS: optionalPositiveInteger,
+    SEEDANCE_DOWNLOAD_TIMEOUT_MS: optionalPositiveInteger,
+    SEEDANCE_BRIDGE_URL: optionalUrl,
+    SEEDANCE_BRIDGE_TOKEN: optionalString,
+    REAL_API_TEST: booleanWithFalseDefault
+  })
+  .superRefine((value, context) => {
+    requireSeedanceDefinition(value, context);
+    if (value.SEEDANCE_PROVIDER !== "seedance") return;
+    requireFields(
+      value,
+      [
+        "SEEDANCE_REQUEST_TIMEOUT_MS",
+        "SEEDANCE_POLL_INTERVAL_MS",
+        "SEEDANCE_MAX_POLL_DURATION_MS",
+        "SEEDANCE_DOWNLOAD_TIMEOUT_MS",
+        "SEEDANCE_BRIDGE_URL",
+        "SEEDANCE_BRIDGE_TOKEN"
+      ],
+      context,
+      "when SEEDANCE_PROVIDER=seedance"
+    );
+  });
+
+const seedanceBridgeSchema = z.object({
+  SEEDANCE_BASE_URL: z.string().url(),
+  SEEDANCE_API_KEY: z.string().trim().min(1),
+  SEEDANCE_MODEL_ID: z.string().trim().min(1),
+  SEEDANCE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive(),
+  SEEDANCE_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive(),
+  SEEDANCE_BRIDGE_TOKEN: z.string().trim().min(1),
+  REAL_API_TEST: booleanWithFalseDefault
 });
 
 export type ApiConfig = z.infer<typeof apiSchema>;
 export type WorkerConfig = z.infer<typeof workerSchema>;
+export type SeedanceBridgeConfig = z.infer<typeof seedanceBridgeSchema>;
 
 export function loadLocalEnvironment(path = defaultEnvironmentPath()): void {
   loadDotenv({ path, quiet: true });
@@ -53,6 +118,62 @@ export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
   return workerSchema.parse(environment);
+}
+
+export function loadSeedanceBridgeConfig(
+  environment: NodeJS.ProcessEnv = process.env
+): SeedanceBridgeConfig {
+  return seedanceBridgeSchema.parse(environment);
+}
+
+function requireSeedanceDefinition(
+  value: {
+    SEEDANCE_PROVIDER: "mock" | "seedance";
+    SEEDANCE_MODEL_ID?: string | undefined;
+  },
+  context: z.RefinementCtx
+): void {
+  if (
+    value.SEEDANCE_PROVIDER === "seedance" &&
+    value.SEEDANCE_MODEL_ID === undefined
+  ) {
+    addRequiredIssue(
+      context,
+      "SEEDANCE_MODEL_ID",
+      "when SEEDANCE_PROVIDER=seedance"
+    );
+  }
+}
+
+function requireFields(
+  value: Record<string, unknown>,
+  fields: readonly string[],
+  context: z.RefinementCtx,
+  condition: string
+): void {
+  for (const field of fields) {
+    if (value[field] === undefined) {
+      addRequiredIssue(context, field, condition);
+    }
+  }
+}
+
+function addRequiredIssue(
+  context: z.RefinementCtx,
+  field: string,
+  condition: string
+): void {
+  context.addIssue({
+    code: "custom",
+    path: [field],
+    message: `${field} is required ${condition}.`
+  });
+}
+
+function emptyStringToUndefined(value: unknown): unknown {
+  return typeof value === "string" && value.trim().length === 0
+    ? undefined
+    : value;
 }
 
 function defaultEnvironmentPath(): string {

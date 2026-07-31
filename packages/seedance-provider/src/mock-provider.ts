@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
-import { createReadStream, type ReadStream } from "node:fs";
+import { createReadStream, statSync, type ReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { ProviderProtocolError } from "./errors.js";
 import type {
   CreateTaskInput,
   MockParameters,
   ProviderCapabilities,
+  ProviderDefinition,
+  ProviderDownload,
+  ProviderRuntime,
   ProviderTaskSnapshot,
-  SeedanceProvider,
   ValidationResult
 } from "./types.js";
 
@@ -102,7 +105,7 @@ interface StoredTask {
 
 export class MockProviderError extends Error {
   constructor(
-    readonly code: "INVALID_PARAMETERS" | "TASK_NOT_FOUND",
+    readonly code: "INVALID_PARAMETERS" | "TASK_NOT_FOUND" | "OUTPUT_NOT_READY",
     message: string
   ) {
     super(message);
@@ -110,27 +113,39 @@ export class MockProviderError extends Error {
   }
 }
 
-export class MockSeedanceProvider implements SeedanceProvider {
+export class MockProviderDefinition implements ProviderDefinition {
   readonly name = "mock" as const;
-
-  private readonly tasks = new Map<string, StoredTask>();
-  private readonly requestIndex = new Map<string, string>();
 
   async getCapabilities(): Promise<ProviderCapabilities> {
     return capabilities;
   }
 
-  validateParameters(model: string, parameters: unknown): ValidationResult {
+  validateParameters(
+    model: string,
+    parameters: unknown
+  ): ValidationResult<MockParameters> {
     if (model !== modelId) {
       return {
         ok: false,
-        issues: [{ path: "model", message: "Unknown Mock Provider model." }]
+        issues: [
+          {
+            path: "model",
+            code: "UNKNOWN_MODEL",
+            message: "Unknown Mock Provider model."
+          }
+        ]
       };
     }
     if (!isRecord(parameters)) {
       return {
         ok: false,
-        issues: [{ path: "parameters", message: "Must be an object." }]
+        issues: [
+          {
+            path: "parameters",
+            code: "INVALID_TYPE",
+            message: "Must be an object."
+          }
+        ]
       };
     }
 
@@ -147,6 +162,7 @@ export class MockSeedanceProvider implements SeedanceProvider {
         issues: [
           {
             path: `parameters.${unknownKey}`,
+            code: "UNKNOWN_PARAMETER",
             message: "Unknown Mock Provider parameter."
           }
         ]
@@ -177,6 +193,7 @@ export class MockSeedanceProvider implements SeedanceProvider {
         ok: false,
         issues: issues.map((issue) => ({
           path: `parameters.${issue.path}`,
+          code: "UNSUPPORTED_VALUE",
           message: issue.message
         }))
       };
@@ -184,6 +201,14 @@ export class MockSeedanceProvider implements SeedanceProvider {
 
     return { ok: true, value: values as unknown as MockParameters };
   }
+}
+
+export class MockSeedanceProvider
+  extends MockProviderDefinition
+  implements ProviderRuntime
+{
+  private readonly tasks = new Map<string, StoredTask>();
+  private readonly requestIndex = new Map<string, string>();
 
   async createTask(input: CreateTaskInput): Promise<ProviderTaskSnapshot> {
     const existingId = this.requestIndex.get(input.clientRequestId);
@@ -211,6 +236,10 @@ export class MockSeedanceProvider implements SeedanceProvider {
     return this.snapshot(task);
   }
 
+  async recoverTask(clientRequestId: string): Promise<string | null> {
+    return this.requestIndex.get(clientRequestId) ?? null;
+  }
+
   async getTask(providerTaskId: string): Promise<ProviderTaskSnapshot> {
     const task = this.requireTask(providerTaskId);
     if (!task.cancelled && task.parameters.scenario !== "slow") {
@@ -223,6 +252,55 @@ export class MockSeedanceProvider implements SeedanceProvider {
     const task = this.requireTask(providerTaskId);
     task.cancelled = true;
     return this.snapshot(task);
+  }
+
+  normalizeStatus(rawStatus: unknown): ProviderTaskSnapshot["status"] {
+    if (
+      rawStatus === "PROCESSING" ||
+      rawStatus === "SUCCEEDED" ||
+      rawStatus === "FAILED" ||
+      rawStatus === "CANCELLED" ||
+      rawStatus === "EXPIRED"
+    ) {
+      return rawStatus;
+    }
+    throw new ProviderProtocolError(
+      "NORMALIZE",
+      "Mock Provider returned an unknown status."
+    );
+  }
+
+  normalizeUsage(rawResponse: unknown) {
+    if (
+      isRecord(rawResponse) &&
+      Array.isArray(rawResponse.usage) &&
+      rawResponse.usage.every(isMockUsage)
+    ) {
+      return rawResponse.usage;
+    }
+    return [];
+  }
+
+  async downloadOutput(
+    providerTaskId: string,
+    output: { kind: "video" }
+  ): Promise<ProviderDownload> {
+    void output;
+    const task = this.requireTask(providerTaskId);
+    const snapshot = this.snapshot(task);
+    if (snapshot.status !== "SUCCEEDED") {
+      throw new MockProviderError(
+        "OUTPUT_NOT_READY",
+        "Mock Provider output is not ready."
+      );
+    }
+    const path = mockVideoFixturePath();
+    return {
+      body: createReadStream(path),
+      contentType: "video/mp4",
+      contentLength: statSync(path).size,
+      fileName: `${providerTaskId}.mp4`
+    };
   }
 
   private requireTask(providerTaskId: string): StoredTask {
@@ -275,6 +353,7 @@ export class MockSeedanceProvider implements SeedanceProvider {
       outputs: [
         {
           kind: "video",
+          available: true,
           uri: `mock://videos/${task.id}.mp4`,
           mimeType: "video/mp4"
         }
@@ -287,9 +366,7 @@ export class MockSeedanceProvider implements SeedanceProvider {
 }
 
 export function openMockVideoFixture(): ReadStream {
-  return createReadStream(
-    fileURLToPath(new URL("./fixtures/mock-output.mp4", import.meta.url))
-  );
+  return createReadStream(mockVideoFixturePath());
 }
 
 function stableTaskId(clientRequestId: string): string {
@@ -302,4 +379,19 @@ function stableTaskId(clientRequestId: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMockUsage(
+  value: unknown
+): value is { metric: string; quantity: string; unit: string } {
+  return (
+    isRecord(value) &&
+    typeof value.metric === "string" &&
+    typeof value.quantity === "string" &&
+    typeof value.unit === "string"
+  );
+}
+
+function mockVideoFixturePath(): string {
+  return fileURLToPath(new URL("./fixtures/mock-output.mp4", import.meta.url));
 }

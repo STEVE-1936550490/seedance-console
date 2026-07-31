@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "FIXTURE_AUTHENTICATION_FAILED",
+    "message": "Fixture Bridge authentication failed.",
+    "operation": "GET",
+    "retry": "NEVER",
+    "requestId": "fixture-request-id"
+  }
+}

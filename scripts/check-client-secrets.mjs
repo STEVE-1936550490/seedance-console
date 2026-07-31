@@ -9,8 +9,25 @@ try {
   if (error.code !== "ENOENT") throw error;
 }
 
-const forbiddenNames = ["MAAS_API_KEY", "MAAS_PRIVATE_KEY_PATH"];
-const configuredSecret = process.env.MAAS_API_KEY?.trim();
+const forbiddenNames = [
+  "SEEDANCE_API_KEY",
+  "SEEDANCE_BASE_URL",
+  "SEEDANCE_BRIDGE_TOKEN",
+  "SEEDANCE_BRIDGE_URL",
+  "MAAS_API_KEY",
+  "MAAS_PRIVATE_KEY_PATH"
+];
+const forbiddenDeploymentNames = [
+  "SEEDANCE_API_KEY",
+  "SEEDANCE_BASE_URL",
+  "MAAS_API_KEY",
+  "MAAS_PRIVATE_KEY_PATH"
+];
+const configuredSecrets = [
+  process.env.SEEDANCE_API_KEY?.trim(),
+  process.env.SEEDANCE_BRIDGE_TOKEN?.trim(),
+  process.env.MAAS_API_KEY?.trim()
+].filter((value) => value !== undefined && value.length >= 8);
 const roots = [
   resolve(repositoryRoot, "apps/web/src"),
   resolve(repositoryRoot, "apps/web/.next")
@@ -26,12 +43,10 @@ for (const root of roots) {
         );
       }
     }
-    if (
-      configuredSecret !== undefined &&
-      configuredSecret.length >= 8 &&
-      content.includes(configuredSecret)
-    ) {
-      throw new Error("Client output contains the configured API key.");
+    for (const configuredSecret of configuredSecrets) {
+      if (content.includes(configuredSecret)) {
+        throw new Error("Client output contains a configured server secret.");
+      }
     }
   }
 }
@@ -40,7 +55,7 @@ for (const deploymentFile of ["Dockerfile", "docker-compose.yml"]) {
   const path = resolve(repositoryRoot, deploymentFile);
   const content = await readFile(path, "utf8");
 
-  for (const name of forbiddenNames) {
+  for (const name of forbiddenDeploymentNames) {
     if (content.includes(name)) {
       throw new Error(`${name} must not be injected by ${deploymentFile}.`);
     }

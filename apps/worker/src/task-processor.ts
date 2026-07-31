@@ -4,12 +4,15 @@ import {
   AssetKind,
   AssetRole,
   Prisma,
+  ProviderSubmissionStatus,
   TaskStatus,
   type PrismaClient
 } from "@prisma/client";
 
 import {
   openMockVideoFixture,
+  ProviderOutcomeUnknownError,
+  type ProviderTaskSnapshot,
   type SeedanceProvider
 } from "@seedance/seedance-provider";
 import type { Storage } from "@seedance/storage";
@@ -30,9 +33,11 @@ export interface TaskProcessorDependencies {
 
 export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
   return async (taskId: string): Promise<void> => {
+    let providerAccepted = false;
     const initialTask = await dependencies.prisma.videoTask.findUnique({
       where: { id: taskId },
       include: {
+        submission: true,
         assets: {
           where: { role: AssetRole.REFERENCE_IMAGE }
         }
@@ -43,48 +48,77 @@ export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
     }
 
     try {
+      let snapshot: ProviderTaskSnapshot;
       if (initialTask.status === TaskStatus.QUEUED) {
-        await transition(
-          dependencies.prisma,
-          taskId,
-          TaskStatus.QUEUED,
-          TaskStatus.SUBMITTING,
-          "WORKER_STARTED"
+        const claimed = await claimSubmission(dependencies.prisma, initialTask);
+        if (!claimed) return;
+        try {
+          snapshot = await dependencies.provider.createTask({
+            clientRequestId: initialTask.clientRequestId,
+            model: initialTask.model,
+            prompt: initialTask.prompt,
+            referenceAssetIds: initialTask.assets.map(
+              (relation) => relation.assetId
+            ),
+            parameters: initialTask.parameters
+          });
+        } catch (error) {
+          if (error instanceof ProviderOutcomeUnknownError) {
+            const recoveredId = await dependencies.provider.recoverTask(
+              initialTask.clientRequestId
+            );
+            if (recoveredId === null) {
+              await markSubmissionOutcomeUnknown(
+                dependencies.prisma,
+                initialTask
+              );
+              return;
+            }
+            snapshot = await dependencies.provider.getTask(recoveredId);
+          } else {
+            throw error;
+          }
+        }
+        providerAccepted = true;
+        if (
+          !(await persistProviderAcceptance(
+            dependencies.prisma,
+            initialTask,
+            snapshot.providerTaskId
+          ))
+        ) {
+          return;
+        }
+      } else if (initialTask.status === TaskStatus.SUBMITTING) {
+        const recoveredId =
+          initialTask.submission?.providerTaskId ??
+          (await dependencies.provider.recoverTask(
+            initialTask.clientRequestId
+          ));
+        if (recoveredId === null) {
+          await markSubmissionOutcomeUnknown(dependencies.prisma, initialTask);
+          return;
+        }
+        providerAccepted = true;
+        if (
+          !(await persistProviderAcceptance(
+            dependencies.prisma,
+            initialTask,
+            recoveredId
+          ))
+        ) {
+          return;
+        }
+        snapshot = await dependencies.provider.getTask(recoveredId);
+      } else if (
+        initialTask.status === TaskStatus.PROCESSING &&
+        initialTask.providerTaskId !== null
+      ) {
+        snapshot = await dependencies.provider.getTask(
+          initialTask.providerTaskId
         );
-      }
-
-      const snapshot = await dependencies.provider.createTask({
-        clientRequestId: initialTask.clientRequestId,
-        model: initialTask.model,
-        prompt: initialTask.prompt,
-        referenceAssetIds: initialTask.assets.map(
-          (relation) => relation.assetId
-        ),
-        parameters: initialTask.parameters
-      });
-
-      const current = await dependencies.prisma.videoTask.findUniqueOrThrow({
-        where: { id: taskId }
-      });
-      if (current.status === TaskStatus.SUBMITTING) {
-        await dependencies.prisma.$transaction([
-          dependencies.prisma.videoTask.update({
-            where: { id: taskId },
-            data: {
-              status: TaskStatus.PROCESSING,
-              providerTaskId: snapshot.providerTaskId,
-              submittedAt: current.submittedAt ?? new Date()
-            }
-          }),
-          dependencies.prisma.taskEvent.create({
-            data: {
-              taskId,
-              fromStatus: TaskStatus.SUBMITTING,
-              toStatus: TaskStatus.PROCESSING,
-              reason: "PROVIDER_ACCEPTED"
-            }
-          })
-        ]);
+      } else {
+        return;
       }
 
       const pollDelayMs = dependencies.pollDelayMs ?? 1_500;
@@ -187,6 +221,9 @@ export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
         });
       }
     } catch (error) {
+      if (providerAccepted) {
+        throw error;
+      }
       await failTask(
         dependencies.prisma,
         taskId,
@@ -198,6 +235,151 @@ export function createTaskProcessor(dependencies: TaskProcessorDependencies) {
 }
 
 class TaskNoLongerProcessingError extends Error {}
+
+async function claimSubmission(
+  prisma: PrismaClient,
+  task: {
+    id: string;
+    provider: string;
+    clientRequestId: string;
+  }
+): Promise<boolean> {
+  return prisma.$transaction(async (transaction) => {
+    const claimed = await transaction.videoTask.updateMany({
+      where: {
+        id: task.id,
+        status: TaskStatus.QUEUED,
+        providerTaskId: null
+      },
+      data: { status: TaskStatus.SUBMITTING }
+    });
+    if (claimed.count !== 1) return false;
+    await transaction.providerSubmission.upsert({
+      where: { taskId: task.id },
+      create: {
+        taskId: task.id,
+        provider: task.provider,
+        clientRequestId: task.clientRequestId,
+        status: ProviderSubmissionStatus.ATTEMPTING
+      },
+      update: {
+        status: ProviderSubmissionStatus.ATTEMPTING,
+        errorCode: null
+      }
+    });
+    await transaction.taskEvent.create({
+      data: {
+        taskId: task.id,
+        fromStatus: TaskStatus.QUEUED,
+        toStatus: TaskStatus.SUBMITTING,
+        reason: "WORKER_STARTED"
+      }
+    });
+    return true;
+  });
+}
+
+async function persistProviderAcceptance(
+  prisma: PrismaClient,
+  task: {
+    id: string;
+    provider: string;
+    clientRequestId: string;
+  },
+  providerTaskId: string
+): Promise<boolean> {
+  return prisma.$transaction(async (transaction) => {
+    const acceptedAt = new Date();
+    const accepted = await transaction.videoTask.updateMany({
+      where: {
+        id: task.id,
+        status: TaskStatus.SUBMITTING,
+        providerTaskId: null
+      },
+      data: {
+        status: TaskStatus.PROCESSING,
+        providerTaskId,
+        submittedAt: acceptedAt,
+        errorCode: null,
+        errorMessage: null
+      }
+    });
+    await transaction.providerSubmission.upsert({
+      where: { taskId: task.id },
+      create: {
+        taskId: task.id,
+        provider: task.provider,
+        clientRequestId: task.clientRequestId,
+        providerTaskId,
+        status: ProviderSubmissionStatus.ACCEPTED,
+        acceptedAt
+      },
+      update: {
+        providerTaskId,
+        status: ProviderSubmissionStatus.ACCEPTED,
+        acceptedAt,
+        errorCode: null
+      }
+    });
+    if (accepted.count !== 1) return false;
+    await transaction.taskEvent.create({
+      data: {
+        taskId: task.id,
+        fromStatus: TaskStatus.SUBMITTING,
+        toStatus: TaskStatus.PROCESSING,
+        reason: "PROVIDER_ACCEPTED"
+      }
+    });
+    return true;
+  });
+}
+
+async function markSubmissionOutcomeUnknown(
+  prisma: PrismaClient,
+  task: {
+    id: string;
+    provider: string;
+    clientRequestId: string;
+  }
+): Promise<void> {
+  await prisma.$transaction(async (transaction) => {
+    const marked = await transaction.videoTask.updateMany({
+      where: {
+        id: task.id,
+        status: TaskStatus.SUBMITTING,
+        providerTaskId: null
+      },
+      data: {
+        errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN",
+        errorMessage:
+          "Provider create outcome is unknown; automatic resubmission is disabled."
+      }
+    });
+    if (marked.count !== 1) return;
+    await transaction.providerSubmission.upsert({
+      where: { taskId: task.id },
+      create: {
+        taskId: task.id,
+        provider: task.provider,
+        clientRequestId: task.clientRequestId,
+        status: ProviderSubmissionStatus.OUTCOME_UNKNOWN,
+        errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN"
+      },
+      update: {
+        status: ProviderSubmissionStatus.OUTCOME_UNKNOWN,
+        errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN"
+      }
+    });
+    await transaction.taskEvent.create({
+      data: {
+        taskId: task.id,
+        fromStatus: TaskStatus.SUBMITTING,
+        toStatus: TaskStatus.SUBMITTING,
+        reason: "PROVIDER_CREATE_OUTCOME_UNKNOWN"
+      }
+    });
+  });
+}
 
 async function transition(
   prisma: PrismaClient,

@@ -15,6 +15,9 @@
     "build": "tsc -p tsconfig.json && mkdir -p dist/fixtures && cp -R fixtures/. dist/fixtures",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "zod": "^4.1.12"
+  },
   "devDependencies": {
     "@types/node": "^22.15.0"
   }

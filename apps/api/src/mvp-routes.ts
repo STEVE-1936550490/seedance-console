@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import type {
   ProviderCapabilities,
-  SeedanceProvider
+  ProviderDefinition
 } from "@seedance/seedance-provider";
 import type {
   TaskDto,
@@ -32,7 +32,7 @@ const taskParamsSchema = z.object({ taskId: z.string().min(1) });
 
 export interface MvpRouteDependencies {
   prisma: PrismaClient;
-  provider: SeedanceProvider;
+  provider: ProviderDefinition;
   taskQueue: Queue<VideoGenerationJob>;
   storage: Storage;
   uploadMaxBytes: number;

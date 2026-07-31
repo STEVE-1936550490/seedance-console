@@ -2,13 +2,25 @@
 
 Seedance Console 是面向 Linux 内部环境的 AI 视频生成控制台。当前 MVP 使用 Mock Provider 验证参考图片上传、异步任务、状态轮询、历史、视频预览和下载，不调用真实 Seedance 服务。
 
+## 当前基线
+
+Mock MVP 已在 Ubuntu 24.04 Linux 服务器完成 Docker 端到端验收，覆盖图片上传、异步任务、Worker 处理、状态轮询、Mock 视频生成、播放下载、历史记录和容器重启后的数据保留。真实 Seedance Provider 尚未接入，默认且唯一可用的 Provider 仍为 `mock`。
+
+详细记录：
+
+- [Linux Docker 部署与运维](docs/DEPLOYMENT.md)
+- [Mock MVP 端到端验收](docs/MOCK_E2E_ACCEPTANCE.md)
+- [真实 Provider 协议状态](docs/provider-api.md)
+- [真实 Provider 待确认清单](docs/PROVIDER_PROTOCOL_CHECKLIST.md)
+
 ## Linux Docker 启动
 
 服务器只需安装 Docker Engine 和 Docker Compose v2：
 
 ```bash
 test -f .env || cp .env.example .env
-docker compose up -d --build
+docker compose config --quiet
+docker compose up -d --build --wait
 docker compose ps
 ```
 
@@ -32,10 +44,10 @@ docker compose logs -f api worker web
 根目录 `.env` 已被 Git 和 Docker 构建上下文忽略。当前必须保持：
 
 ```dotenv
-SEEDANCE_PROVIDER_DRIVER=mock
+SEEDANCE_PROVIDER=mock
 ```
 
-即使 `.env` 中已经填写 `MAAS_API_KEY`，Compose 也不会将其注入 Web、API 或 Mock Worker。客户端构建还会执行密钥扫描。
+Mock 模式不要求任何真实 Provider 配置。`SEEDANCE_API_KEY` 和 `SEEDANCE_BRIDGE_TOKEN` 不会注入 Web 或 API；客户端构建还会执行密钥扫描。
 
 ## 本地源码开发
 
@@ -100,15 +112,9 @@ docker compose down -v
 
 该命令会不可恢复地删除 PostgreSQL、Redis 和生成文件。
 
-## 下一步
+## 真实 Provider 状态
 
-下次从 Linux Docker 端到端验收继续，暂不接入真实 Provider：
-
-1. 执行 `docker compose up -d --build --wait`，检查全部服务健康状态。
-2. 验证上传图片、数据库建任务、Redis 排队和 Worker 调用 Mock Provider。
-3. 验证状态轮询、视频播放与下载，以及刷新后的任务恢复和历史记录。
-4. 检查浏览器请求、页面源码和构建产物中不存在 API Key。
-5. 修复目标服务器环境中发现的问题，再决定是否进入真实 Provider 阶段。
+真实 Seedance API 尚未接入，也不得自动调用收费接口。现有 SDK 和示例只能确认部分调用形状，不能替代完整官方协议。所有未确认项目均在 `docs/provider-api.md` 中标记为 `TODO_CONFIRM`；真实任务编排接入前保持 `SEEDANCE_PROVIDER=mock`。
 
 ## 工作区
 

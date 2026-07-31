@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "FIXTURE_UNAVAILABLE",
+    "message": "Fixture Bridge is temporarily unavailable.",
+    "operation": "GET",
+    "retry": "SAFE_READ",
+    "requestId": "fixture-request-id"
+  }
+}

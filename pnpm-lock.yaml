@@ -177,6 +177,10 @@ importers:
         version: 6.19.3(typescript@5.9.3)
 
   packages/seedance-provider:
+    dependencies:
+      zod:
+        specifier: ^4.1.12
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
