@@ -139,6 +139,10 @@ docker compose config --quiet
 
 ## 7. 阶段 5：可恢复轮询
 
+实现说明见 [Provider 版本化轮询实现](POLLING_SCHEDULING.md)。当前采用
+`pollVersion + pollLeaseUntil` 作为每轮查询的乐观版本和执行租约；PostgreSQL
+保存调度事实，BullMQ 只负责投递。
+
 ### 范围
 
 - Prisma 增加 poll 调度字段和索引。

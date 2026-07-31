@@ -43,6 +43,9 @@ describe("Provider configuration", () => {
           expect.objectContaining({ path: ["SEEDANCE_REQUEST_TIMEOUT_MS"] }),
           expect.objectContaining({ path: ["SEEDANCE_POLL_INTERVAL_MS"] }),
           expect.objectContaining({
+            path: ["SEEDANCE_MAX_POLL_INTERVAL_MS"]
+          }),
+          expect.objectContaining({
             path: ["SEEDANCE_MAX_POLL_DURATION_MS"]
           }),
           expect.objectContaining({ path: ["SEEDANCE_DOWNLOAD_TIMEOUT_MS"] })
@@ -57,6 +60,7 @@ describe("Provider configuration", () => {
       SEEDANCE_MODEL_ID: "fixture-model",
       SEEDANCE_REQUEST_TIMEOUT_MS: "1000",
       SEEDANCE_POLL_INTERVAL_MS: "2000",
+      SEEDANCE_MAX_POLL_INTERVAL_MS: "2500",
       SEEDANCE_MAX_POLL_DURATION_MS: "3000",
       SEEDANCE_DOWNLOAD_TIMEOUT_MS: "4000",
       SEEDANCE_BRIDGE_URL: "http://bridge.internal:8080",
@@ -67,6 +71,7 @@ describe("Provider configuration", () => {
       SEEDANCE_PROVIDER: "seedance",
       SEEDANCE_REQUEST_TIMEOUT_MS: 1000,
       SEEDANCE_POLL_INTERVAL_MS: 2000,
+      SEEDANCE_MAX_POLL_INTERVAL_MS: 2500,
       SEEDANCE_MAX_POLL_DURATION_MS: 3000,
       SEEDANCE_DOWNLOAD_TIMEOUT_MS: 4000,
       REAL_API_TEST: false

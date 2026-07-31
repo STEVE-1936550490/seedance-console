@@ -3,13 +3,24 @@ import { resolve } from "node:path";
 import { loadLocalEnvironment, loadWorkerConfig } from "@seedance/config";
 import { prisma } from "@seedance/db";
 import { MockSeedanceProvider } from "@seedance/seedance-provider";
-import { videoQueueName, type VideoGenerationJob } from "@seedance/shared";
+import {
+  parseVideoGenerationJob,
+  videoQueueName,
+  type VideoGenerationJob
+} from "@seedance/shared";
 import { LocalStorage } from "@seedance/storage";
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 
 import { buildWorkerServer, type WorkerHealth } from "./server.js";
-import { createTaskProcessor } from "./task-processor.js";
+import { BullMqProviderJobScheduler } from "./job-scheduler.js";
+import { createPollCoordinator } from "./poll-coordinator.js";
+import { PrismaTaskStore } from "./task-store.js";
+import {
+  createDownloadProcessor,
+  createPollProcessor,
+  createSubmitProcessor
+} from "./task-processor.js";
 
 loadLocalEnvironment();
 const config = loadWorkerConfig();
@@ -20,7 +31,6 @@ if (config.SEEDANCE_PROVIDER !== "mock") {
 }
 const provider = new MockSeedanceProvider();
 const storage = new LocalStorage(resolve(process.cwd(), config.STORAGE_ROOT));
-const processTask = createTaskProcessor({ prisma, provider, storage });
 
 const health: WorkerHealth = { redis: "down" };
 const redis = new Redis(config.REDIS_URL, {
@@ -60,9 +70,50 @@ const heartbeatTimer = setInterval(
 );
 heartbeatTimer.unref();
 
+const taskQueue = new Queue<VideoGenerationJob>(videoQueueName, {
+  connection: redis
+});
+const scheduler = new BullMqProviderJobScheduler(taskQueue);
+const store = new PrismaTaskStore(prisma);
+const policy = {
+  baseIntervalMs: config.SEEDANCE_POLL_INTERVAL_MS ?? 1_500,
+  maxIntervalMs: config.SEEDANCE_MAX_POLL_INTERVAL_MS ?? 30_000,
+  maxDurationMs: config.SEEDANCE_MAX_POLL_DURATION_MS ?? 10 * 60_000,
+  requestTimeoutMs: config.SEEDANCE_REQUEST_TIMEOUT_MS ?? 30_000,
+  jitterRatio: config.SEEDANCE_POLL_JITTER_RATIO
+};
+const processSubmit = createSubmitProcessor({
+  store,
+  provider,
+  scheduler,
+  policy
+});
+const processPoll = createPollProcessor({
+  store,
+  provider,
+  scheduler,
+  policy
+});
+const processDownload = createDownloadProcessor({
+  prisma,
+  provider,
+  storage
+});
 const queueWorker = new Worker<VideoGenerationJob>(
   videoQueueName,
-  async (job) => processTask(job.data.taskId),
+  async (job) => {
+    const payload = parseVideoGenerationJob(job.data);
+    switch (payload.kind) {
+      case "provider-submit":
+        await processSubmit(payload.taskId);
+        return;
+      case "provider-poll":
+        await processPoll(payload.taskId, payload.pollVersion);
+        return;
+      case "provider-download":
+        await processDownload(payload.taskId);
+    }
+  },
   {
     connection: redis,
     concurrency: 2
@@ -72,11 +123,25 @@ queueWorker.on("error", () => {
   health.redis = "down";
 });
 
+const reconcilePolls = createPollCoordinator({
+  store,
+  scheduler,
+  batchSize: config.WORKER_RECONCILE_BATCH_SIZE
+});
+void reconcilePolls().catch(() => undefined);
+const reconcileTimer = setInterval(
+  () => void reconcilePolls().catch(() => undefined),
+  config.WORKER_RECONCILE_INTERVAL_MS
+);
+reconcileTimer.unref();
+
 const server = buildWorkerServer(() => health);
 
 const close = async (): Promise<void> => {
   clearInterval(heartbeatTimer);
+  clearInterval(reconcileTimer);
   await queueWorker.close();
+  await taskQueue.close();
   redis.disconnect();
   await server.close();
   await prisma.$disconnect();

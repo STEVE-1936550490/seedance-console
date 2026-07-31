@@ -66,20 +66,46 @@ const workerSchema = z
     WORKER_PORT: z.coerce.number().int().min(1).max(65535).default(43172),
     SEEDANCE_REQUEST_TIMEOUT_MS: optionalPositiveInteger,
     SEEDANCE_POLL_INTERVAL_MS: optionalPositiveInteger,
+    SEEDANCE_MAX_POLL_INTERVAL_MS: optionalPositiveInteger,
     SEEDANCE_MAX_POLL_DURATION_MS: optionalPositiveInteger,
     SEEDANCE_DOWNLOAD_TIMEOUT_MS: optionalPositiveInteger,
+    SEEDANCE_POLL_JITTER_RATIO: z.coerce.number().min(0).max(0.5).default(0.1),
+    WORKER_RECONCILE_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10_000),
+    WORKER_RECONCILE_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1_000)
+      .default(100),
     SEEDANCE_BRIDGE_URL: optionalUrl,
     SEEDANCE_BRIDGE_TOKEN: optionalString,
     REAL_API_TEST: booleanWithFalseDefault
   })
   .superRefine((value, context) => {
     requireSeedanceDefinition(value, context);
+    if (
+      value.SEEDANCE_POLL_INTERVAL_MS !== undefined &&
+      value.SEEDANCE_MAX_POLL_INTERVAL_MS !== undefined &&
+      value.SEEDANCE_MAX_POLL_INTERVAL_MS < value.SEEDANCE_POLL_INTERVAL_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SEEDANCE_MAX_POLL_INTERVAL_MS"],
+        message:
+          "SEEDANCE_MAX_POLL_INTERVAL_MS must be greater than or equal to SEEDANCE_POLL_INTERVAL_MS."
+      });
+    }
     if (value.SEEDANCE_PROVIDER !== "seedance") return;
     requireFields(
       value,
       [
         "SEEDANCE_REQUEST_TIMEOUT_MS",
         "SEEDANCE_POLL_INTERVAL_MS",
+        "SEEDANCE_MAX_POLL_INTERVAL_MS",
         "SEEDANCE_MAX_POLL_DURATION_MS",
         "SEEDANCE_DOWNLOAD_TIMEOUT_MS",
         "SEEDANCE_BRIDGE_URL",

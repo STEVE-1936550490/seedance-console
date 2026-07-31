@@ -14,10 +14,12 @@ import type {
   ProviderDefinition
 } from "@seedance/seedance-provider";
 import type {
+  ProviderSubmitJob,
   TaskDto,
   TaskListResponse,
   VideoGenerationJob
 } from "@seedance/shared";
+import { providerJobId } from "@seedance/shared";
 import type { Storage } from "@seedance/storage";
 
 const createTaskSchema = z.object({
@@ -162,17 +164,17 @@ export async function registerMvpRoutes(
       taskId = task.id;
     }
 
-    await dependencies.taskQueue.add(
-      "generate",
-      { taskId },
-      {
-        jobId: taskId,
-        attempts: 2,
-        backoff: { type: "fixed", delay: 1_000 },
-        removeOnComplete: 100,
-        removeOnFail: 100
-      }
-    );
+    const submitJob: ProviderSubmitJob = {
+      kind: "provider-submit",
+      taskId
+    };
+    await dependencies.taskQueue.add(submitJob.kind, submitJob, {
+      jobId: providerJobId(submitJob),
+      attempts: 2,
+      backoff: { type: "fixed", delay: 1_000 },
+      removeOnComplete: true,
+      removeOnFail: 100
+    });
 
     const task = await findTask(dependencies.prisma, taskId);
     return reply.code(existing === null ? 202 : 200).send(toTaskDto(task));

@@ -35,42 +35,55 @@ enum ProviderSubmissionStatus {
 }
 
 model VideoTask {
-  id               String      @id @default(cuid())
-  clientRequestId  String      @unique
-  provider         String      @default("mock")
-  providerTaskId   String?
-  model            String
-  status           TaskStatus  @default(QUEUED)
-  prompt           String
-  parameters       Json
-  progress         Int?
-  errorCode        String?
-  errorMessage     String?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  submittedAt      DateTime?
-  completedAt      DateTime?
-  events           TaskEvent[]
-  assets           TaskAsset[]
-  usageRecords     UsageRecord[]
-  submission       ProviderSubmission?
+  id                  String              @id @default(cuid())
+  clientRequestId     String              @unique
+  provider            String              @default("mock")
+  providerTaskId      String?
+  model               String
+  status              TaskStatus          @default(QUEUED)
+  prompt              String
+  parameters          Json
+  progress            Int?
+  errorCode           String?
+  errorMessage        String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  submittedAt         DateTime?
+  completedAt         DateTime?
+  pollStartedAt       DateTime?
+  nextPollAt          DateTime?
+  lastPolledAt        DateTime?
+  pollDeadlineAt      DateTime?
+  pollLeaseUntil      DateTime?
+  pollVersion         Int                 @default(0)
+  pollAttempt         Int                 @default(0)
+  pollTransientErrors Int                 @default(0)
+  lastProviderStatus  String?
+  lastPollError       String?
+  downloadPending     Boolean             @default(false)
+  events              TaskEvent[]
+  assets              TaskAsset[]
+  usageRecords        UsageRecord[]
+  submission          ProviderSubmission?
 
   @@unique([provider, providerTaskId])
   @@index([status, createdAt])
+  @@index([status, nextPollAt])
+  @@index([status, downloadPending])
 }
 
 model ProviderSubmission {
-  id               String                   @id @default(cuid())
-  taskId           String                   @unique
-  provider         String
-  clientRequestId  String
-  providerTaskId   String?
-  status           ProviderSubmissionStatus @default(ATTEMPTING)
-  errorCode        String?
-  startedAt        DateTime                 @default(now())
-  acceptedAt       DateTime?
-  updatedAt        DateTime                 @updatedAt
-  task             VideoTask                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  id              String                   @id @default(cuid())
+  taskId          String                   @unique
+  provider        String
+  clientRequestId String
+  providerTaskId  String?
+  status          ProviderSubmissionStatus @default(ATTEMPTING)
+  errorCode       String?
+  startedAt       DateTime                 @default(now())
+  acceptedAt      DateTime?
+  updatedAt       DateTime                 @updatedAt
+  task            VideoTask                @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@unique([provider, clientRequestId])
   @@unique([provider, providerTaskId])
@@ -78,52 +91,52 @@ model ProviderSubmission {
 }
 
 model Asset {
-  id            String      @id @default(cuid())
-  kind          AssetKind
-  storageKey    String      @unique
-  originalName  String
-  mimeType      String
-  sizeBytes     BigInt
-  checksum      String?
-  createdAt     DateTime    @default(now())
-  tasks         TaskAsset[]
+  id           String      @id @default(cuid())
+  kind         AssetKind
+  storageKey   String      @unique
+  originalName String
+  mimeType     String
+  sizeBytes    BigInt
+  checksum     String?
+  createdAt    DateTime    @default(now())
+  tasks        TaskAsset[]
 }
 
 model TaskAsset {
-  taskId     String
-  assetId    String
-  role       AssetRole
-  position   Int       @default(0)
-  task       VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  asset      Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  taskId   String
+  assetId  String
+  role     AssetRole
+  position Int       @default(0)
+  task     VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  asset    Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@id([taskId, assetId, role])
   @@index([taskId, role, position])
 }
 
 model TaskEvent {
-  id          String      @id @default(cuid())
-  taskId      String
-  fromStatus  TaskStatus?
-  toStatus    TaskStatus
-  reason      String?
-  metadata    Json?
-  createdAt   DateTime    @default(now())
-  task        VideoTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  id         String      @id @default(cuid())
+  taskId     String
+  fromStatus TaskStatus?
+  toStatus   TaskStatus
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+  task       VideoTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId, createdAt])
 }
 
 model UsageRecord {
-  id          String    @id @default(cuid())
-  taskId      String
-  provider    String
-  metric      String
-  quantity    Decimal   @db.Decimal(20, 6)
-  unit        String
-  raw         Json?
-  recordedAt  DateTime  @default(now())
-  task        VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  id         String    @id @default(cuid())
+  taskId     String
+  provider   String
+  metric     String
+  quantity   Decimal   @db.Decimal(20, 6)
+  unit       String
+  raw        Json?
+  recordedAt DateTime  @default(now())
+  task       VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId, recordedAt])
 }

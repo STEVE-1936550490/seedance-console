@@ -12,6 +12,7 @@ Mock MVP 已在 Ubuntu 24.04 Linux 服务器完成 Docker 端到端验收，覆�
 - [Mock MVP 端到端验收](docs/MOCK_E2E_ACCEPTANCE.md)
 - [真实 Provider 协议状态](docs/provider-api.md)
 - [真实 Provider 待确认清单](docs/PROVIDER_PROTOCOL_CHECKLIST.md)
+- [Provider 版本化轮询实现](docs/POLLING_SCHEDULING.md)
 
 ## Linux Docker 启动
 
