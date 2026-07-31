@@ -83,7 +83,8 @@ MP4 校验要求完整的顶层 box 边界、首个 `ftyp`，并同时存在完�
 
 Worker 只消费 `ProviderRuntime.downloadOutput()` 返回的受控流，不接受或解析
 Provider URL。Seedance 路径只允许访问部署配置中的私有 Bridge endpoint；签名
-URL 由未来 Bridge/SDK 在其私有边界内解析和解密，不能进入 job、数据库或日志。
+URL 已由 Bridge/SDK 在其私有边界内解析、下载和解密，不能进入 job、数据库或
+日志。该边界已由真实 Demo 的 MP4 下载与本地持久化验证。
 
 当前没有“任意 URL 下载”路径，因此不存在基于 fixture 绕过 URL 校验的分支。
 若未来引入 direct URL transport，必须在启用前实现 HTTPS 强制、域名允许列表、

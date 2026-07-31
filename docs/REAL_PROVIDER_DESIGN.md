@@ -1,8 +1,13 @@
 # 真实 Seedance Provider 接入设计
 
+> 本文保留 P2 时的设计背景。对应实现已经完成，并由一次真实纯文生视频 Demo 验证；
+> 当前事实状态以
+> [真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md) 和
+> [分阶段实施记录](REAL_PROVIDER_IMPLEMENTATION_PLAN.md) 为准。
+
 ## 1. 目标与边界
 
-本文是 P2 设计，不是实现。设计依据仅来自：
+本文是 P2 设计归档，不是当前实施状态清单。设计依据来自：
 
 - `docs/provider-api.md` 中 SDK、Demo 和源码已经确认的调用格式。
 - `docs/PROVIDER_ADAPTER.md` 的内部隔离原则。
@@ -10,7 +15,8 @@
 
 `TODO_CONFIRM` 项不在本文中补猜。未确认的用量、Webhook、远端取消、完整参数范围等非核心能力不阻塞创建、查询、状态映射、视频下载和本地持久化的设计；会改变安全 transport、素材可达性或防重复提交保证的缺口则明确列为 P3 阻断条件。
 
-本阶段不修改代码、不配置真实 Key、不调用真实接口。
+“本阶段不修改代码、不配置真实 Key、不调用真实接口”是 P2 当时的设计边界；后续
+P3/P4 已按双重门完成实现和唯一真实 Demo。
 
 ## 2. 设计结论
 

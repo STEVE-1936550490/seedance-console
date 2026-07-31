@@ -1,10 +1,13 @@
-# Seedance AICC Bridge HTTP 契约草案
+# Seedance AICC Bridge HTTP 契约
 
 ## 1. 范围
 
-本契约定义 TypeScript `SeedanceProviderAdapter` 与未来私有 Python AICC Bridge 之间的最小 HTTP 边界。本阶段只实现 TypeScript Client、Zod schema 和本地 fake HTTP 测试，不实现 Python 服务、不安装 SDK、不访问真实 Provider。
+本契约定义 TypeScript `SeedanceProviderAdapter` 与私有 Python AICC Bridge 之间的
+最小 HTTP 边界。TypeScript Client、Zod schema、Python 服务、固定 SDK 镜像和
+fake Bridge 测试均已实现；create、query 和 output stream 已由唯一真实 Demo 验证。
 
-Bridge 只能监听 Docker 私有网络，不发布公网端口。真实 API Key、AICC SDK 和 RSA 私钥未来只存在于 Bridge；Web 与 API 不接触这些值。
+Bridge 只能监听 Docker 私有网络，不发布公网端口。真实 API Key、AICC SDK 和 RSA
+私钥只存在于 Bridge；Web 与 API 不接触这些值。
 
 ## 2. 鉴权与通用规则
 
@@ -182,7 +185,9 @@ Content-Length: <bytes>
 <binary video stream>
 ```
 
-未来 Bridge 负责用 SDK 重新查询视频 URL、下载和解密；TypeScript Client 不接收或记录完整签名 URL。本阶段 fake server 只返回测试字节。
+Bridge 使用 SDK 重新查询视频 URL、下载和解密；TypeScript Client 不接收或记录
+完整签名 URL。自动化测试的 fake server 返回测试字节，真实 Demo 已验证 MP4
+stream、Worker 校验和本地落盘。
 
 失败使用统一 JSON 错误。部分文件、密文和明文临时文件必须由 Bridge 清理。
 
@@ -210,14 +215,20 @@ Content-Length: <bytes>
 | `operation`    | enum          | `HEALTH`、`CREATE`、`RECOVER`、`GET`、`CANCEL`、`DOWNLOAD`       |
 | `retry`        | enum          | `NEVER`、`SAFE_READ`、`IDEMPOTENT_ONLY`、`MANUAL_RECONCILIATION` |
 | `retryAfterMs` | integer，可选 | Bridge 明确给出的等待时间                                        |
-| `requestId`    | string，可选  | 内部关联 ID，不是密钥                                            |
+| `requestId`    | string，可选  | 脱敏关联 ID；仅允许安全字符，不是密钥                            |
 
 HTTP 分类：
 
 - 401/403：认证失败，不重试。
 - 429：查询/下载可标记 `SAFE_READ`；创建不自动重试。
 - 创建 5xx/超时：结果未知，人工协调。
+- SDK 创建收到非 200：`PROVIDER_CREATE_HTTP_ERROR`，结果保守视为未知，人工协调。
+- SDK 创建收到 200 但缺少非空 ID：`PROVIDER_CREATE_RESPONSE_MISSING_ID`，人工协调。
 - 查询/下载 5xx/超时：暂时错误，可由 Worker 退避重试。
+
+创建诊断只持久化 Bridge 稳定分类、HTTP 状态、受限 Provider 业务码及 allowlist
+关联 ID。不得持久化响应正文、错误消息、Authorization、API Key、完整 URL 或请求体。
+
 - 501：能力不支持。
 - 无效 JSON、缺字段或未知字段：协议错误。
 

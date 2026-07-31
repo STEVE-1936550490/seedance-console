@@ -19,7 +19,11 @@ flowchart LR
   V -.direct-http，待协议确认.-> D
 ```
 
-浏览器只访问 Web 和内部 API，不直接访问 Provider、Provider Bridge、PostgreSQL、Redis 或服务器文件路径。`maas-sdk` 模式下 API Key 仅注入 Python Bridge；未来 `direct-http` 模式下仅注入 Worker。首个实现只启用 Mock Provider。
+浏览器只访问 Web 和内部 API，不直接访问 Provider、Provider Bridge、PostgreSQL、
+Redis 或服务器文件路径。AICC 模式下 API Key 仅注入 Python Bridge；未来
+`direct-http` 模式若获得完整协议依据，凭据也只能注入 Worker。当前 Mock 和 AICC
+Bridge 均已实现，但默认只启用 Mock；真实创建还受 `REAL_API_TEST` 和单次用户授权
+双重门保护。
 
 ## 2. 组件职责
 
@@ -83,9 +87,11 @@ flowchart LR
 
 ### 执行与查询
 
-1. Worker 锁定任务并调用 Mock Provider；保存 Provider 任务 ID 后进入 `PROCESSING`。
+1. Worker 锁定任务并按配置调用 Mock Provider 或私有 AICC Bridge；保存 Provider
+   任务 ID 后进入 `PROCESSING`。
 2. 后续延迟 Job 查询状态并规范化为内部状态。
-3. 成功时 Worker 将视频流写入 Storage，再在事务内写入输出 Asset、UsageRecord 和成功事件。
+3. 成功时 Worker 将视频流写入 Storage，再在事务内写入输出 Asset、VideoOutput、
+   可用的 UsageRecord 和成功事件。
 4. 前端只轮询 API；API 从 PostgreSQL 返回稳定的内部 DTO。
 
 ## 4. 推荐目录结构

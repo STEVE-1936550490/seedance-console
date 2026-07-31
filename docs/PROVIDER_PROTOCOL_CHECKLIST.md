@@ -2,7 +2,10 @@
 
 ## 1. 使用方式
 
-本清单用于向接口文档、平台页面或服务商逐项取证。不要填写或截图真实 API Key、Authorization、私钥、完整敏感提示词、完整素材内容或仍有效的签名下载 URL。
+本清单用于继续向接口文档、平台页面或服务商逐项取证。纯文生视频最小闭环已经由
+唯一真实 Demo 验证；未勾选项代表扩展能力或正式协议证据仍缺失，不表示 AICC
+Bridge、真实创建、轮询或下载尚未实现。不要填写或截图真实 API Key、
+Authorization、私钥、完整敏感提示词、完整素材内容或仍有效的签名下载 URL。
 
 每项证据应记录：
 
@@ -14,14 +17,14 @@
 状态标记：
 
 - `[x]`：当前本地 SDK 源码或 demo 已提供部分证据，仍需阅读备注。
-- `[ ]`：`TODO_CONFIRM`，实现真实 Provider 前需补齐。
+- `[ ]`：`TODO_CONFIRM`，扩展对应真实能力或提高协议保证前需补齐。
 
 ## 2. 接口与身份认证
 
-- [ ] `TODO_CONFIRM` 测试环境和生产环境的 Base URL、区域差异及 API 版本。
+- [x] 唯一真实 Demo 确认当前 AICC Base URL 必须包含 `/api/v3`；`TODO_CONFIRM` 测试/生产环境、区域差异和版本策略。
 - [x] SDK 源码使用 Bearer API Key；`TODO_CONFIRM` 官方鉴权文档、Key 权限、轮换和过期规则。
 - [ ] `TODO_CONFIRM` 是否要求项目 ID、租户 ID、签名 Header、固定出口 IP、代理或自定义 CA。
-- [x] demo 使用模型名 `doubao-seedance-2.0`；`TODO_CONFIRM` 当前账号实际开通的模型 ID 和映射后的 endpoint。
+- [x] 唯一真实 Demo 使用 `doubao-seedance-2.0`，模型映射返回 200 且 endpoint 有效；`TODO_CONFIRM` 长期权限和版本退役策略。
 - [x] SDK 使用 `POST /mapping/query` 查询模型映射；`TODO_CONFIRM` 响应完整 schema 和失败策略。
 - [ ] `TODO_CONFIRM` 无 Python SDK 的普通 HTTP 调用是否被官方支持。
 - [ ] `TODO_CONFIRM` 若支持直接 HTTP，提供完整 AICC/机密通道协议或官方兼容库。
@@ -32,12 +35,12 @@
 
 - [x] SDK 使用 `POST /contents/generations/tasks`；`TODO_CONFIRM` 正式请求/响应 schema。
 - [x] demo 展示 `content`、`generate_audio`、`ratio`、`duration`、`watermark`；`TODO_CONFIRM` 必填性、默认值和约束。
-- [ ] `TODO_CONFIRM` 纯文生视频的最小请求和脱敏成功响应。
+- [x] 唯一真实 Demo 已验证纯文生视频最小请求和顶层非空 `id` 成功响应；`TODO_CONFIRM` 正式完整 schema。
 - [ ] `TODO_CONFIRM` 图生视频的最小请求和脱敏成功响应。
 - [ ] `TODO_CONFIRM` 提示词长度、语言、负向提示词和内容组合规则。
 - [ ] `TODO_CONFIRM` 分辨率、比例、时长、帧率字段名、类型、单位、范围和枚举。
 - [ ] `TODO_CONFIRM` 是否支持首帧、尾帧、多参考图、参考视频和参考音频，以及角色/顺序语义。
-- [ ] `TODO_CONFIRM` 创建成功的所有 HTTP 状态和 `providerTaskId` 字段。
+- [x] 唯一真实 Demo 验证 HTTP 200 顶层 `id`；`TODO_CONFIRM` 其他成功状态和完整约束。
 - [ ] `TODO_CONFIRM` 是否支持幂等键或按客户端请求 ID 查询，及超时后的安全恢复方式。
 
 需要的证据：官方参数表；纯文生视频和图生视频各一份脱敏请求/响应；参数校验失败样例；幂等说明。
@@ -60,7 +63,7 @@
 - [x] 源码/示例出现 `pending`、`queued`、`running`、`succeeded`、`failed`。
 - [ ] `TODO_CONFIRM` 完整状态集合、大小写、含义、终态和允许流转。
 - [ ] `TODO_CONFIRM` 查询频率、推荐轮询间隔、最长处理时间、404 和任务过期语义。
-- [ ] `TODO_CONFIRM` 处理中、成功、失败、审核失败各一份脱敏查询响应。
+- [x] 唯一真实 Demo 已验证处理中和成功响应；`TODO_CONFIRM` 普通失败与审核失败响应。
 - [x] SDK 提供 `DELETE /contents/generations/tasks/{task_id}`。
 - [ ] `TODO_CONFIRM` DELETE 是删除还是取消、允许状态、重复调用、竞态和最终状态。
 - [ ] `TODO_CONFIRM` 取消是否收费、是否保留输出、任务成功与取消同时发生时如何判定。
@@ -72,7 +75,7 @@
 
 - [x] SDK 查询成功后读取 `content.video_url`。
 - [x] SDK 对视频 URL 发起流式 GET，且可解密带 `x-tos-meta-enc-dek` 的文件。
-- [ ] `TODO_CONFIRM` 成功响应完整结构、输出数量、视频 MIME/编码/分辨率/时长/帧率字段。
+- [x] 唯一真实 Demo 已验证 `content.video_url`、SDK 下载/解密和 MP4 输出；`TODO_CONFIRM` 完整媒体元数据与多输出语义。
 - [ ] `TODO_CONFIRM` 视频 URL 是否需要 API 鉴权或仅依赖签名，允许 host 和重定向规则。
 - [ ] `TODO_CONFIRM` 视频 URL 有效期、刷新方式和任务记录保留期。
 - [ ] `TODO_CONFIRM` 下载 Content-Type、Content-Length、最大文件大小、校验和与 Range 支持。
@@ -117,9 +120,9 @@
 
 需要的证据：AICC/机密计算白皮书或官方说明、SDK 发布页/授权说明、支持矩阵和日志配置文档。
 
-## 10. 最小脱敏样例包
+## 10. 后续协议扩展所需脱敏样例包
 
-在进入真实 Provider 设计前，建议至少提供以下材料：
+为扩展参考素材、错误分类、取消和计费能力，建议继续提供以下材料：
 
 1. 模型开通页面截图，隐藏账号、余额、Key 和其他个人信息。
 2. 官方接口目录或文档页面截图，包含 Base URL、鉴权、创建、查询和取消/删除。

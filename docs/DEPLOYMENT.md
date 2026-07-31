@@ -4,7 +4,10 @@
 
 Seedance Console Mock MVP 已在 Ubuntu 24.04 Linux 服务器完成 Docker 端到端验收。验收主机使用 Docker Engine `29.6.2` 和 Docker Compose `v5.3.1`；这两个版本是已验证环境记录，不代表项目声明的最低版本。
 
-当前 Compose 只启用 Mock Provider，不调用真实 Seedance API。Web 是唯一面向使用者的入口；API、Worker、PostgreSQL 和 Redis 默认只绑定宿主机回环地址。
+当前 Compose 默认启用 Mock Provider，不调用真实 Seedance API。私有 AICC Bridge
+已实现并完成一次真实 Demo 验收，但只在显式 profile、受保护配置、
+`REAL_API_TEST=true` 和用户单次授权同时满足时使用。Web 是唯一面向使用者的入口；
+API、Worker、PostgreSQL 和 Redis 默认只绑定宿主机回环地址。
 
 ## 2. 环境要求
 

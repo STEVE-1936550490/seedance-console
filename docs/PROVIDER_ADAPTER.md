@@ -2,7 +2,10 @@
 
 ## 1. 目标与边界
 
-`SeedanceProvider` 隔离供应商协议与内部任务模型。API、Worker、数据库和 UI 不读取真实 Seedance 响应字段，也不自行解释供应商状态。第一阶段只实现 `MockSeedanceProvider`；真实实现必须等待 `docs/provider-api.md` 第 11 节的关键协议项补齐。
+`SeedanceProvider` 隔离供应商协议与内部任务模型。API、Worker、数据库和 UI 不读取
+真实 Seedance 响应字段，也不自行解释供应商状态。Mock Provider 与基于私有 AICC
+Bridge 的真实实现均已完成；真实实现只开放当前协议证据和一次真实 Demo 已验证的
+纯文本参数范围。
 
 本文代码是内部契约草案，其中 `prompt`、参考素材和不透明 `parameters` 是控制台领域输入，并非对 Seedance 2.0 请求字段的声明。
 
@@ -124,11 +127,13 @@ Mock 实现必须：
 - 模拟至少一次 `PROCESSING`，并提供无用量、带用量两类测试数据。
 - 对未知参数报验证错误；Mock 参数放在独立 schema 中，明确标记为测试专用。
 
-单元测试覆盖创建幂等、所有状态映射、错误分类、取消能力、用量为空和响应校验。契约测试以同一套测试用例约束 Mock 与未来真实实现。
+单元测试覆盖创建幂等、所有状态映射、错误分类、取消能力、用量为空和响应校验。
+契约测试约束 Mock 与 Seedance fake Bridge runtime；唯一真实 Demo 另行验证 AICC
+create、poll、download 和持久化闭环，不作为日常自动化测试依赖。
 
-## 6. 接入真实 Provider 前的检查清单
+## 6. 真实 Provider 剩余协议清单
 
-拿到 `docs/provider-api.md` 后，逐项确认并记录：
+纯文生视频最小闭环已经完成。以下扩展能力仍需按 `docs/provider-api.md` 逐项确认：
 
 - Base URL、认证方式、密钥轮换和请求头。
 - 创建/查询/取消端点及准确字段。

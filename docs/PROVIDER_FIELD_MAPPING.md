@@ -116,12 +116,12 @@ SDK 会加入或覆盖 `model`。Direct transport 若未来可用，也必须按
 
 Direct HTTP 已确认在 HTTP 200 响应读取顶层 `id`；Python SDK 对外返回 task ID 字符串。
 
-| Transport 原始值            | Adapter 字段                         | 校验与处理                          |
-| --------------------------- | ------------------------------------ | ----------------------------------- |
-| HTTP JSON `id`              | `ProviderTaskCreated.providerTaskId` | 必须是非空字符串                    |
-| SDK 返回字符串              | `ProviderTaskCreated.providerTaskId` | 必须是非空字符串                    |
-| HTTP request/correlation ID | `debug.providerRequestId`            | 字段位置 `TODO_CONFIRM`；当前不读取 |
-| 其他响应字段                | 无                                   | 丢弃，不传业务层                    |
+| Transport 原始值            | Adapter 字段                         | 校验与处理                                              |
+| --------------------------- | ------------------------------------ | ------------------------------------------------------- |
+| HTTP JSON `id`              | `ProviderTaskCreated.providerTaskId` | 必须是非空字符串                                        |
+| SDK 返回字符串              | `ProviderTaskCreated.providerTaskId` | 必须是非空字符串                                        |
+| HTTP request/correlation ID | Bridge 脱敏诊断                      | 仅从 allowlist 响应 Header 读取安全字符；不进入业务 DTO |
+| 其他响应字段                | 无                                   | 丢弃，不传业务层                                        |
 
 建议最小 Direct schema：
 
@@ -131,7 +131,11 @@ const createResponseSchema = z.object({
 });
 ```
 
-SDK 返回空字符串时不能形成有效 task ID。由于 SDK 可能在非 200 时丢失错误细节，Adapter 返回 `ProviderOutcomeUnknownError`，不得自动再次创建。
+SDK 返回空字符串时不能形成有效 task ID。Bridge 在固定 SDK 的
+`secure_http_client.send()` 边界捕获解密后的 HTTP 状态，并只保留受限业务码和
+allowlist 关联 ID，不保留响应正文。非 200 分类为
+`PROVIDER_CREATE_HTTP_ERROR`，200 但缺少非空 `id` 分类为
+`PROVIDER_CREATE_RESPONSE_MISSING_ID`；两者仍进入 outcome unknown，均不得自动再次创建。
 
 ## 5. 查询任务请求映射
 
@@ -251,7 +255,9 @@ Provider 业务错误结构和完整错误码是 `TODO_CONFIRM`。初始实现�
 | HTTP 429                    | `PROVIDER_RATE_LIMITED`                                         | 不自动重发，结果按是否已收到响应分类   | 允许按配置和可信 Retry-After 退避 |
 | HTTP 5xx / 网络中断         | `PROVIDER_TRANSIENT_ERROR` 或 `PROVIDER_CREATE_OUTCOME_UNKNOWN` | 若无法证明未创建，进入 outcome unknown | 安全读允许退避                    |
 | HTTP 非成功且非暂时类       | `PROVIDER_REQUEST_REJECTED`                                     | 不重试                                 | 默认不重试                        |
-| SDK 创建返回空 ID           | `PROVIDER_CREATE_OUTCOME_UNKNOWN`                               | 不重试                                 | 不适用                            |
+| SDK 创建非 200              | `PROVIDER_CREATE_HTTP_ERROR`                                    | outcome unknown，不重试                | 不适用                            |
+| SDK 创建 200 但缺少 ID      | `PROVIDER_CREATE_RESPONSE_MISSING_ID`                           | outcome unknown，不重试                | 不适用                            |
+| 创建未取得 HTTP 响应        | `PROVIDER_CREATE_OUTCOME_UNKNOWN`                               | 不重试                                 | 不适用                            |
 | 查询 `status=failed`        | `PROVIDER_TASK_FAILED`                                          | 不适用                                 | 进入内部 FAILED                   |
 | 查询缺 status / schema 不符 | `PROVIDER_PROTOCOL_ERROR`                                       | 不适用                                 | 保持当前状态，受控重查/告警       |
 | 未知 status                 | `PROVIDER_UNKNOWN_STATUS`                                       | 不适用                                 | 保持当前状态，受控重查/告警       |

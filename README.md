@@ -1,10 +1,23 @@
 # Seedance Console
 
-Seedance Console 是面向 Linux 内部环境的 AI 视频生成控制台。当前 MVP 使用 Mock Provider 验证参考图片上传、异步任务、状态轮询、历史、视频预览和下载，不调用真实 Seedance 服务。
+Seedance Console 是面向 Linux 内部环境的 AI 视频生成控制台。项目同时提供默认
+Mock 工作流和受双重门保护的 Seedance AICC Python Bridge；日常运行不会自动调用
+真实 Seedance 服务。
 
 ## 当前基线
 
-Mock MVP 已在 Ubuntu 24.04 Linux 服务器完成 Docker 端到端验收，覆盖图片上传、异步任务、Worker 处理、状态轮询、Mock 视频生成、播放下载、历史记录和容器重启后的数据保留。真实 Seedance Provider 尚未接入，默认且唯一可用的 Provider 仍为 `mock`。
+当前里程碑：
+
+- Mock MVP：已完成 Ubuntu 24.04 Docker 端到端验收。
+- AICC Bridge：已完成固定 SDK、机密通道、创建、查询、下载/解密和安全日志边界。
+- 唯一真实 Demo：已完成 `create → poll → download → 本地持久化`，MP4 的 Web
+  播放和下载均通过。
+- 默认运行状态：`SEEDANCE_PROVIDER=mock`、`REAL_API_TEST=false`；真实创建门关闭
+  时返回 403。
+
+真实调用能力已接入，但不是默认 Provider，也不得在没有用户对当次调用明确授权时
+开启。真实 Demo 的最终事实记录见
+[真实 Provider Demo 最终检查点](docs/REAL_PROVIDER_DEMO_CHECKPOINT.md)。
 
 详细记录：
 
@@ -13,6 +26,7 @@ Mock MVP 已在 Ubuntu 24.04 Linux 服务器完成 Docker 端到端验收，覆�
 - [真实 Provider 协议状态](docs/provider-api.md)
 - [真实 Provider 待确认清单](docs/PROVIDER_PROTOCOL_CHECKLIST.md)
 - [Provider 版本化轮询实现](docs/POLLING_SCHEDULING.md)
+- [真实 Provider 分阶段实施完成记录](docs/REAL_PROVIDER_IMPLEMENTATION_PLAN.md)
 
 ## Linux Docker 启动
 
@@ -115,7 +129,21 @@ docker compose down -v
 
 ## 真实 Provider 状态
 
-真实 Seedance API 尚未接入，也不得自动调用收费接口。现有 SDK 和示例只能确认部分调用形状，不能替代完整官方协议。所有未确认项目均在 `docs/provider-api.md` 中标记为 `TODO_CONFIRM`；真实任务编排接入前保持 `SEEDANCE_PROVIDER=mock`。
+真实 Seedance AICC 路径已经通过一次纯文生视频任务完成验收，包括真实创建、版本化
+轮询、SDK 下载/解密、本地 MP4 持久化以及 Web 播放下载。部署根因验证同时确认
+`AICC_BASE_URL` 必须包含 `/api/v3`。
+
+当前仍必须保持：
+
+```dotenv
+SEEDANCE_PROVIDER=mock
+REAL_API_TEST=false
+```
+
+真实 create 同时要求用户对当次调用明确授权和 `REAL_API_TEST=true`。唯一真实 Demo
+完成后门禁已关闭并复验返回 403，不得重复创建。未确认的参考素材组合、远端取消、
+用量/费用、正式错误码和远端幂等能力继续以 `docs/provider-api.md` 中的
+`TODO_CONFIRM` 为准。
 
 ## 工作区
 
@@ -123,9 +151,10 @@ docker compose down -v
 apps/web                   Next.js 创作台和任务历史
 apps/api                   Fastify API、上传和任务查询
 apps/worker                BullMQ Worker 和 Mock 任务处理
+services/provider-bridge   私有 Python AICC SDK Bridge
 packages/shared            共享 DTO 和队列契约
 packages/config            环境变量校验
-packages/seedance-provider Provider 契约和 Mock 实现
+packages/seedance-provider Provider 契约、Mock 与 Seedance Bridge Adapter
 packages/db                Prisma schema、迁移和客户端
 packages/storage           本地文件存储抽象
 ```

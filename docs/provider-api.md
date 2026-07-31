@@ -1,5 +1,10 @@
 # Seedance 2.0 Provider API
 
+> 本文主体保留最初静态审计的证据和 `TODO_CONFIRM`，其中“未安装/未执行”描述的是
+> 当时的审计阶段。当前已选择并实现私有 Python AICC Bridge，固定 SDK 已安装在
+> Bridge 镜像中，唯一真实纯文生视频 Demo 已成功。当前事实状态见
+> [真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md)。
+
 ## 1. 文档状态与证据
 
 本文根据以下本地材料静态整理，未安装、导入或执行 SDK，也未向移动云发起请求：
@@ -26,7 +31,7 @@ maas_seedance_sdk-1.0.0-py3-none-any.whl
 SHA-256 36f86be4d97400c1964eba0a0f9b845e047e8430499ae42990cb98cb9d961039
 ```
 
-## 2. 候选调用边界（尚未选型）
+## 2. 历史候选调用边界与当前选型
 
 ```text
 TypeScript Worker
@@ -37,20 +42,23 @@ TypeScript Worker
             └─ 内网 Python Provider Bridge -> maas_seedance SDK -> 移动云（仅在 SDK 必需时）
 ```
 
-P1 不决定真实 Provider 的 transport。P2 应遵循：
+以下是 P1/P2 当时的选型原则：
 
 - 若官方确认 TypeScript 可以完整实现鉴权、AICC/机密通道、创建、查询和下载，则优先在现有 TypeScript Provider Adapter 内实现。
 - 只有官方确认真实 API 必须通过当前 Python SDK，或未提供可兼容实现的机密通道协议时，才引入私有 Python Provider Bridge。
 - 若使用 Bridge，它只能监听 Docker 内部网络，不能向浏览器或公网发布；API Key、RSA 私钥和 SDK 原始响应不能离开 Bridge。
 - 不论 transport 如何选择，API、Worker 业务状态、数据库和前端只使用内部 Provider DTO。
 
-当前两种真实 transport 都是 **不可实现/待确认** 状态。静态源码显示 SDK 会执行远程证明并加密请求与响应；在官方提供无 SDK 调用协议或确认普通 HTTP 可用前，不能仅照抄 URL 和 Bearer Header。
+当前已经选择并实现私有 Python AICC Bridge，真实 create、query、SDK
+download/decrypt 和本地持久化均已通过唯一纯文生视频 Demo。Direct TypeScript
+transport 仍是 **不可用/待确认** 状态；在官方提供完整 AICC 协议或兼容库前，不能
+仅照抄 URL 和 Bearer Header。
 
 ## 3. 配置及实际 API Key 填写位置
 
 不要把真实值写进本文、Git、TypeScript 源码、Next.js 环境变量或任何 `NEXT_PUBLIC_*` 变量。
 
-如果 P2 最终确认必须使用 Python SDK，后续部署可在服务器创建独立的 SDK 配置文件：
+当前 Python Bridge 部署在服务器使用独立的 SDK 配置文件：
 
 ```text
 /etc/seedance-console/provider.env
@@ -68,7 +76,10 @@ MAAS_PUBLIC_KEY_PATH=/var/lib/seedance-console/keys/seedance_pub.pem
 MAAS_PRIVATE_KEY_PATH=/var/lib/seedance-console/keys/seedance_priv.pem
 ```
 
-这些是 SDK 构造器字段的参考映射，不是最终应用环境变量契约；P2/P3 仍应按项目统一的 `SEEDANCE_*` 配置设计。该文件权限应为 `0600`，只注入 Python Provider Bridge；不要注入 `web` 或 `api` 容器。若最终选择 TypeScript transport，密钥只注入 Worker。Docker Compose 文件创建后应显式引用外部 `env_file`，而不是把密钥复制进仓库。
+这些是 SDK 构造器字段的参考映射；Bridge 同时兼容当前统一的 `AICC_*`、
+`MAAS_*` 和 `SEEDANCE_*` 配置别名。Base URL 必须包含 `/api/v3`。配置文件权限应为
+`0600`，只注入 Python Provider Bridge；不要注入 `web` 或 `api` 容器。Docker
+Compose 显式引用外部 `env_file`，不把密钥复制进仓库。
 
 密钥目录必须提前创建并持久化。SDK 在任一 PEM 文件缺失时会生成一对 RSA 4096 密钥，但不会创建父目录；私钥权限应为 `0600`。生产环境不要使用示例的相对 `./tmp` 路径。
 
@@ -76,13 +87,16 @@ MAAS_PRIVATE_KEY_PATH=/var/lib/seedance-console/keys/seedance_priv.pem
 
 ### 4.1 安装边界
 
-SDK 只安装在未来的 `services/provider-bridge` Python 镜像中，不安装到 Next.js、Fastify 或 TypeScript Worker，也不从浏览器动态下载。阶段 6 构建镜像时，从已审核的私有制品中提取 wheel 并固定版本/校验值：
+SDK 现只安装在 `services/provider-bridge` Python 镜像中，不安装到 Next.js、
+Fastify 或 TypeScript Worker，也不从浏览器动态下载。镜像从已审核的私有制品中
+提取 wheel 并固定版本/校验值：
 
 ```bash
 python -m pip install --no-cache-dir ./maas_seedance_sdk-1.0.0-py3-none-any.whl
 ```
 
-本轮不执行该命令。是否允许将 wheel 放入私有镜像或私有制品库，仍需在第 11.4 节确认。
+当前 Bridge Docker 构建已经执行等价安装，并在安装前校验 wheel SHA-256。制品的
+长期私有分发与授权仍需按第 11.4 节管理。
 
 ### 4.2 初始化
 

@@ -1,8 +1,14 @@
 # 真实 Seedance Provider 分阶段实施计划
 
+> 2026-07-31 的首次真实收费 Demo 检查点见
+> [真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md)。阶段 1–10
+> 已按当前纯文生视频范围完成；唯一有效真实 create 已成功，不得再次创建新的真实
+> 收费任务。
+
 ## 1. 执行原则
 
-本文用于后续 P3/P4，不在 P2 执行。
+本文最初用于规划 P3/P4，现同时作为实施完成记录。历史范围和验证标准予以保留；
+各阶段的当前状态以标题和阶段 10 的验收记录为准。
 
 - 每阶段保持 Mock Provider 可运行、可测试，默认配置始终为 `mock`。
 - 每阶段只引入一个可独立验证的增量。
@@ -23,9 +29,9 @@ pnpm build
 docker compose config --quiet
 ```
 
-## 2. P3 开始前的设计门
+## 2. P3 开始前的设计门（已完成）
 
-开始写真实 transport 前确认以下工程选择：
+实施前已确认以下工程选择：
 
 1. 应用 Provider 值固定为 `mock | seedance`。
 2. 基于当前协议证据，首个真实 transport 选择私有 Python Bridge；Direct TypeScript transport 保持禁用，除非已有完整 AICC 兼容依据。
@@ -35,9 +41,10 @@ docker compose config --quiet
    - Console 短期签名 HTTPS 素材端点。
 5. 明确 Provider 真实运行配置只从部署环境注入，不进入仓库。
 
-如果第 3 或第 4 项未满足，可以完成接口、映射、fixture、状态机和 fake Bridge 测试，但不能宣称真实图生视频 Provider 已可部署。
+固定 SDK 制品、日志关闭方案和纯文生视频真实链路已经验收。真实参考素材的 Provider
+可达 URL 策略仍属于后续范围，因此当前只声明纯文生视频真实路径已完成。
 
-## 3. 阶段 1：配置和类型扩展
+## 3. 阶段 1：配置和类型扩展（已完成）
 
 ### 范围
 
@@ -67,7 +74,7 @@ docker compose config --quiet
 - `seedance` 缺必填配置时启动失败，不回退到 Mock。
 - API 进程环境不需要 `SEEDANCE_API_KEY`。
 
-## 4. 阶段 2：Provider Bridge 契约与客户端
+## 4. 阶段 2：Provider Bridge 契约与客户端（已完成）
 
 ### 范围
 
@@ -80,7 +87,7 @@ docker compose config --quiet
 - 实现 TypeScript `SeedanceBridgeClient`，所有 JSON 用 Zod 校验。
 - 使用内部 bearer token；日志 serializer 删除 token、URL 和 body。
 - 首先实现 fake Bridge 测试服务器，不接 SDK、不访问网络。
-- 在 SDK 制品和日志条件满足后，再搭建 `services/provider-bridge`：
+- 已搭建 `services/provider-bridge`：
   - 固定 wheel SHA-256。
   - 使用非 root 用户。
   - 只监听 Compose 内部网络。
@@ -95,7 +102,7 @@ docker compose config --quiet
 - Bridge 未发布宿主机端口。
 - health check 不调用 Provider。
 
-## 5. 阶段 3：创建任务映射
+## 5. 阶段 3：创建任务映射（纯文本范围已完成）
 
 ### 范围
 
@@ -114,7 +121,7 @@ docker compose config --quiet
 - prompt、素材 URL 和 Authorization 不出现在日志。
 - create transport 失败不会触发第二次 create 调用。
 
-## 6. 阶段 4：持久化 `providerTaskId`
+## 6. 阶段 4：持久化 `providerTaskId`（已完成）
 
 ### 范围
 
@@ -137,7 +144,7 @@ docker compose config --quiet
 - Worker 重启后可以从 fake Bridge 注册表恢复 ID。
 - 注册表也无映射时保持 `SUBMITTING/OUTCOME_UNKNOWN`，不产生第二个收费任务。
 
-## 7. 阶段 5：可恢复轮询
+## 7. 阶段 5：可恢复轮询（已完成）
 
 实现说明见 [Provider 版本化轮询实现](POLLING_SCHEDULING.md)。当前采用
 `pollVersion + pollLeaseUntil` 作为每轮查询的乐观版本和执行租约；PostgreSQL
@@ -162,16 +169,17 @@ docker compose config --quiet
 - Worker 重启后从 PostgreSQL 的 `nextPollAt` 恢复。
 - fake clock 验证退避、抖动边界和最大时长，测试不 sleep。
 
-## 8. 阶段 6：视频下载和本地持久化
+## 8. 阶段 6：视频下载和本地持久化（已完成）
 
-实现说明见 [Provider 输出下载与恢复](DOWNLOAD_SAFETY.md)。当前 Worker/Storage
-闭环已使用 Mock fixture 实现；真实 Python Bridge 和 SDK 下载/解密仍未启用。
+实现说明见 [Provider 输出下载与恢复](DOWNLOAD_SAFETY.md)。Worker/Storage 闭环已
+通过 Mock fixture 自动化测试，并由唯一真实 Demo 验证 Python Bridge、SDK
+下载/解密、MP4 校验、原子落盘及 Web 播放下载。
 
 ### 范围
 
 - Provider `succeeded` 只安排 download job，不直接写内部 `SUCCEEDED`。
 - 实现 `downloadOutput(providerTaskId)`：
-  - Bridge 调用 SDK 下载/解密。
+  - Bridge 调用 SDK 下载/解密（已由真实 MP4 验证）。
   - URL 不离开 Adapter。
 - Storage 增加临时写和原子提交能力。
 - 使用确定性最终 key。
@@ -188,7 +196,7 @@ docker compose config --quiet
 - 文件成功但数据库提交失败后可从确定性 key 恢复，不重新下载或创建任务。
 - Provider URL 和签名参数不进入数据库、job 或日志。
 
-## 9. 阶段 7：取消任务
+## 9. 阶段 7：取消任务（不支持语义已完成）
 
 ### 范围
 
@@ -207,7 +215,7 @@ docker compose config --quiet
 - 成功与取消竞态不能把 `SUCCEEDED` 改成 `CANCELLED`。
 - Mock 取消行为继续通过现有验收。
 
-## 10. 阶段 8：fixture 单元与集成测试
+## 10. 阶段 8：fixture 单元与集成测试（已完成）
 
 ### 范围
 
@@ -233,11 +241,11 @@ pnpm check:client-secrets
 
 测试过程中网络只连接本地 fake server；增加断言确保没有访问真实 Base URL。
 
-## 11. 阶段 9：Docker 集成
+## 11. 阶段 9：Docker 集成（已完成）
 
 ### 范围
 
-- 若选择 Bridge，新增私有 Bridge image/service。
+- 已新增私有 Bridge image/service。
 - API 不接收 Provider Key；Worker 只接收 Bridge URL/token；Bridge 独占真实 Key 和 RSA 私钥。
 - Bridge 不配置 `ports`，只在内部网络被 Worker 访问。
 - 新增 Bridge 持久化卷和 healthcheck。
@@ -258,9 +266,11 @@ docker compose ps --all
 - Compose 渲染结果不包含真实 Key。
 - Web 镜像、页面源码和网络响应不含 Provider secrets。
 
-## 12. 阶段 10：显式开启的真实 API 最小联调
+## 12. 阶段 10：显式开启的真实 API 最小联调（已完成）
 
-本阶段属于 P4，只有用户对当次收费调用明确确认后才能执行。
+本阶段已在 2026-07-31 获得用户对当次收费调用的明确确认后完成。最终记录见
+[真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md)。不得把已完成
+状态解释为允许继续调用；新的真实 create 仍必须获得新的明确授权。
 
 双重门：
 
@@ -280,31 +290,45 @@ REAL_API_TEST=true
 6. 验证视频已保存本地后再判断任务成功。
 7. 联调完成后关闭 `REAL_API_TEST`。
 
+验收结果：
+
+- 唯一有效真实 create 次数：1。
+- providerTaskId：`cgt-20260731221858-8z7zj`。
+- 状态：`SUCCEEDED`。
+- 状态链：`QUEUED → PROCESSING → SUCCEEDED`。
+- 总耗时：约 3 分钟。
+- 输出：MP4，5,329,931 字节。
+- 本地持久化、Web 播放和下载：通过。
+- `AICC_BASE_URL` 必须包含 `/api/v3`；缺失时模型映射和错误路径请求返回 404。
+- 完成后恢复 `SEEDANCE_PROVIDER=mock`、`REAL_API_TEST=false`。
+- 关闭状态下真实 create 门复验返回 `403 / REAL_API_TEST_DISABLED`。
+
 ## 13. 阶段依赖关系
 
 ```text
-1 配置和类型
+1 配置和类型 ✓
   ↓
-2 Bridge/transport client
+2 Bridge/transport client ✓
   ↓
-3 创建映射
+3 纯文本创建映射 ✓
   ↓
-4 providerTaskId 持久化
+4 providerTaskId 持久化 ✓
   ↓
-5 可恢复轮询
+5 可恢复轮询 ✓
   ↓
-6 下载和持久化
+6 下载和持久化 ✓
   ↓
-7 取消语义
+7 不支持取消语义 ✓
   ↓
-8 fixture/集成测试
+8 fixture/集成测试 ✓
   ↓
-9 Docker 集成
+9 Docker 集成 ✓
   ↓ 用户明确授权
-10 真实最小联调
+10 真实最小联调 ✓
 ```
 
-阶段 7 可以在远端取消仍未确认时完成“不支持”的安全实现，不阻塞阶段 8/9。阶段 10 不能反向成为前面阶段测试的依赖。
+阶段 7 已完成“不支持”的安全实现。阶段 10 的一次性真实验收不反向成为自动化
+测试的依赖，日常测试仍只使用 Mock、fixture 和 fake Bridge。
 
 ## 14. 完成定义
 
@@ -318,4 +342,5 @@ P3 完成需同时满足：
 - Provider URL 过期前输出已保存到本地 Storage。
 - fixture 测试不调用收费接口。
 - lint、typecheck、test、build 和 Compose config 全部通过。
-- 未执行真实视频生成。
+- 唯一真实视频生成已成功完成并保存本地；日常运行已恢复 Mock。
+- `REAL_API_TEST=false`，关闭门返回 403，未经新授权不得执行后续真实 create。
