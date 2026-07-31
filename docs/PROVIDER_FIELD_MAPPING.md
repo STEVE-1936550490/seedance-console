@@ -215,12 +215,12 @@ Provider 尚无已确认的取消和过期原始状态，因此初始 `normalize
 
 ## 8. 视频输出地址映射
 
-| Provider 来源                       | Adapter 行为                                                  | 持久化                                                 |
-| ----------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
-| `content.video_url`                 | 校验 URL 语法、HTTPS scheme 和 allowlist；仅在 Adapter 内使用 | 禁止保存                                               |
-| SDK `download_video(task_id, path)` | Bridge 使用 providerTaskId 重新查询、下载并解密               | 只保存最终本地文件                                     |
-| Adapter `downloadOutput()`          | 返回已验证流和媒体元数据                                      | Worker 写入 Storage                                    |
-| Storage 确定性 key                  | `outputs/<internalTaskId>.mp4`                                | Asset 保存 storageKey、MIME、大小、可用时保存 checksum |
+| Provider 来源                       | Adapter 行为                                                  | 持久化                                                  |
+| ----------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------- |
+| `content.video_url`                 | 校验 URL 语法、HTTPS scheme 和 allowlist；仅在 Adapter 内使用 | 禁止保存                                                |
+| SDK `download_video(task_id, path)` | Bridge 使用 providerTaskId 重新查询、下载并解密               | 只保存最终本地文件                                      |
+| Adapter `downloadOutput()`          | 返回已验证流和媒体元数据                                      | Worker 写入 Storage                                     |
+| Storage 确定性 key                  | `outputs/<internalTaskId>/video.mp4`                          | Asset/VideoOutput 保存 storageKey、MIME、大小和 SHA-256 |
 
 业务 API 的播放/下载仍读取本地 Storage，不重定向到 Provider URL。这样 Provider URL 过期不会影响已完成任务。
 
@@ -256,7 +256,7 @@ Provider 业务错误结构和完整错误码是 `TODO_CONFIRM`。初始实现�
 | 查询缺 status / schema 不符 | `PROVIDER_PROTOCOL_ERROR`                                       | 不适用                                 | 保持当前状态，受控重查/告警       |
 | 未知 status                 | `PROVIDER_UNKNOWN_STATUS`                                       | 不适用                                 | 保持当前状态，受控重查/告警       |
 | 成功状态无 video URL        | `PROVIDER_OUTPUT_MISSING`                                       | 不适用                                 | 不进入 SUCCEEDED                  |
-| 下载 URL 过期/不可用        | `PROVIDER_OUTPUT_EXPIRED`                                       | 不适用                                 | 重新查询一次；仍失败则人工处理    |
+| 下载 URL 过期/不可用        | `PROVIDER_OUTPUT_EXPIRED`                                       | 不适用                                 | 停止自动下载并转人工处理          |
 | 下载类型/大小/签名不符      | `PROVIDER_OUTPUT_INVALID`                                       | 不适用                                 | 清理临时文件，不进入 SUCCEEDED    |
 | 真实取消未确认              | `PROVIDER_CANCEL_UNSUPPORTED`                                   | 不适用                                 | 不改变远端处理中任务状态          |
 

@@ -48,6 +48,11 @@ describe("MVP media and capabilities routes", () => {
     } as unknown as PrismaClient;
     const storage: Storage = {
       put: async () => ({ sizeBytes: 0 }),
+      putAtomic: async () => ({ sizeBytes: 0, sha256: "0".repeat(64) }),
+      inspect: async () => ({
+        sizeBytes: 12_000,
+        sha256: "0".repeat(64)
+      }),
       openReadStream: () => openMockVideoFixture(),
       stat: async () => ({ sizeBytes: 12_000 }),
       delete: async () => undefined

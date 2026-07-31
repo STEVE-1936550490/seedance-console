@@ -9,7 +9,12 @@ import {
 
 export interface ProviderJobScheduler {
   schedulePoll(taskId: string, pollVersion: number, runAt: Date): Promise<void>;
-  scheduleDownload(taskId: string): Promise<void>;
+  scheduleDownload(
+    taskId: string,
+    providerTaskId: string,
+    downloadVersion: number,
+    runAt: Date
+  ): Promise<void>;
 }
 
 export class BullMqProviderJobScheduler implements ProviderJobScheduler {
@@ -37,13 +42,21 @@ export class BullMqProviderJobScheduler implements ProviderJobScheduler {
     });
   }
 
-  async scheduleDownload(taskId: string): Promise<void> {
+  async scheduleDownload(
+    taskId: string,
+    providerTaskId: string,
+    downloadVersion: number,
+    runAt: Date
+  ): Promise<void> {
     const job: ProviderDownloadJob = {
       kind: "provider-download",
-      taskId
+      taskId,
+      providerTaskId,
+      downloadVersion
     };
     await this.queue.add(job.kind, job, {
       jobId: providerJobId(job),
+      delay: Math.max(0, runAt.getTime() - this.now().getTime()),
       attempts: 1,
       removeOnComplete: true,
       removeOnFail: true

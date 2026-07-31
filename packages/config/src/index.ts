@@ -69,6 +69,32 @@ const workerSchema = z
     SEEDANCE_MAX_POLL_INTERVAL_MS: optionalPositiveInteger,
     SEEDANCE_MAX_POLL_DURATION_MS: optionalPositiveInteger,
     SEEDANCE_DOWNLOAD_TIMEOUT_MS: optionalPositiveInteger,
+    SEEDANCE_DOWNLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .default(512 * 1024 * 1024),
+    SEEDANCE_DOWNLOAD_MAX_ATTEMPTS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(5),
+    SEEDANCE_DOWNLOAD_RETRY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(2_000),
+    SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(30_000),
+    SEEDANCE_MAX_DOWNLOAD_DURATION_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10 * 60_000),
     SEEDANCE_POLL_JITTER_RATIO: z.coerce.number().min(0).max(0.5).default(0.1),
     WORKER_RECONCILE_INTERVAL_MS: z.coerce
       .number()
@@ -97,6 +123,17 @@ const workerSchema = z
         path: ["SEEDANCE_MAX_POLL_INTERVAL_MS"],
         message:
           "SEEDANCE_MAX_POLL_INTERVAL_MS must be greater than or equal to SEEDANCE_POLL_INTERVAL_MS."
+      });
+    }
+    if (
+      value.SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS <
+      value.SEEDANCE_DOWNLOAD_RETRY_INTERVAL_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS"],
+        message:
+          "SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS must be greater than or equal to SEEDANCE_DOWNLOAD_RETRY_INTERVAL_MS."
       });
     }
     if (value.SEEDANCE_PROVIDER !== "seedance") return;

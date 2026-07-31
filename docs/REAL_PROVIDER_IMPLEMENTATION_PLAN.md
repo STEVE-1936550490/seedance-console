@@ -164,6 +164,9 @@ docker compose config --quiet
 
 ## 8. 阶段 6：视频下载和本地持久化
 
+实现说明见 [Provider 输出下载与恢复](DOWNLOAD_SAFETY.md)。当前 Worker/Storage
+闭环已使用 Mock fixture 实现；真实 Python Bridge 和 SDK 下载/解密仍未启用。
+
 ### 范围
 
 - Provider `succeeded` 只安排 download job，不直接写内部 `SUCCEEDED`。
@@ -172,8 +175,10 @@ docker compose config --quiet
   - URL 不离开 Adapter。
 - Storage 增加临时写和原子提交能力。
 - 使用确定性最终 key。
-- 校验响应状态、HTTPS/host、MIME、大小和 MP4 文件签名。
-- 成功后事务创建 Asset/TaskAsset/UsageRecord 并进入 `SUCCEEDED`。
+- Worker 不接收 URL；Bridge 是唯一配置目标。未来 direct URL transport 启用前
+  必须补齐 HTTPS、host/IP 和重定向 SSRF 校验。
+- 校验响应元数据、MIME、大小、SHA-256 和 MP4 容器结构。
+- 成功后事务创建 Asset/TaskAsset/VideoOutput 并进入 `SUCCEEDED`。
 - 当前真实 `normalizeUsage()` 返回空数组。
 
 ### 验证

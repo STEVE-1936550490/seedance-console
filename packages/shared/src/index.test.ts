@@ -21,12 +21,19 @@ describe("Provider queue payloads", () => {
       pollVersion: 3
     });
     expect(providerJobId(poll)).toBe("provider-poll-task-1-v3");
-    expect(
-      parseVideoGenerationJob({
-        kind: "provider-download",
-        taskId: "task-1"
-      })
-    ).toEqual({ kind: "provider-download", taskId: "task-1" });
+    const download = parseVideoGenerationJob({
+      kind: "provider-download",
+      taskId: "task-1",
+      providerTaskId: "provider-task-1",
+      downloadVersion: 2
+    });
+    expect(download).toEqual({
+      kind: "provider-download",
+      taskId: "task-1",
+      providerTaskId: "provider-task-1",
+      downloadVersion: 2
+    });
+    expect(providerJobId(download)).toBe("provider-download-task-1-v2");
   });
 
   it("rejects malformed and non-versioned poll payloads", () => {
@@ -40,5 +47,13 @@ describe("Provider queue payloads", () => {
     expect(() =>
       parseVideoGenerationJob({ kind: "provider-submit", taskId: "" })
     ).toThrow("Invalid Provider job task ID.");
+    expect(() =>
+      parseVideoGenerationJob({
+        kind: "provider-download",
+        taskId: "task-1",
+        providerTaskId: "provider-task-1",
+        downloadVersion: 0
+      })
+    ).toThrow("Invalid Provider job payload.");
   });
 });

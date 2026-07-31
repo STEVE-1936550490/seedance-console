@@ -13,11 +13,11 @@ import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 
 import { buildWorkerServer, type WorkerHealth } from "./server.js";
+import { createDownloadProcessor } from "./download-processor.js";
 import { BullMqProviderJobScheduler } from "./job-scheduler.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import { PrismaTaskStore } from "./task-store.js";
 import {
-  createDownloadProcessor,
   createPollProcessor,
   createSubmitProcessor
 } from "./task-processor.js";
@@ -80,7 +80,8 @@ const policy = {
   maxIntervalMs: config.SEEDANCE_MAX_POLL_INTERVAL_MS ?? 30_000,
   maxDurationMs: config.SEEDANCE_MAX_POLL_DURATION_MS ?? 10 * 60_000,
   requestTimeoutMs: config.SEEDANCE_REQUEST_TIMEOUT_MS ?? 30_000,
-  jitterRatio: config.SEEDANCE_POLL_JITTER_RATIO
+  jitterRatio: config.SEEDANCE_POLL_JITTER_RATIO,
+  downloadMaxDurationMs: config.SEEDANCE_MAX_DOWNLOAD_DURATION_MS
 };
 const processSubmit = createSubmitProcessor({
   store,
@@ -95,9 +96,18 @@ const processPoll = createPollProcessor({
   policy
 });
 const processDownload = createDownloadProcessor({
-  prisma,
+  store,
   provider,
-  storage
+  storage,
+  scheduler,
+  policy: {
+    maxBytes: config.SEEDANCE_DOWNLOAD_MAX_BYTES,
+    timeoutMs: config.SEEDANCE_DOWNLOAD_TIMEOUT_MS ?? 60_000,
+    baseRetryIntervalMs: config.SEEDANCE_DOWNLOAD_RETRY_INTERVAL_MS,
+    maxRetryIntervalMs: config.SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS,
+    maxAttempts: config.SEEDANCE_DOWNLOAD_MAX_ATTEMPTS,
+    jitterRatio: config.SEEDANCE_POLL_JITTER_RATIO
+  }
 });
 const queueWorker = new Worker<VideoGenerationJob>(
   videoQueueName,
@@ -111,7 +121,11 @@ const queueWorker = new Worker<VideoGenerationJob>(
         await processPoll(payload.taskId, payload.pollVersion);
         return;
       case "provider-download":
-        await processDownload(payload.taskId);
+        await processDownload(
+          payload.taskId,
+          payload.providerTaskId,
+          payload.downloadVersion
+        );
     }
   },
   {

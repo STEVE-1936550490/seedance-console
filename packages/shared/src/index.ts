@@ -76,6 +76,8 @@ export interface ProviderPollJob {
 export interface ProviderDownloadJob {
   kind: "provider-download";
   taskId: string;
+  providerTaskId: string;
+  downloadVersion: number;
 }
 
 export type VideoGenerationJob =
@@ -85,7 +87,7 @@ export function parseVideoGenerationJob(value: unknown): VideoGenerationJob {
   if (!isRecord(value) || typeof value.taskId !== "string") {
     throw new Error("Invalid Provider job payload.");
   }
-  if (value.kind === "provider-submit" || value.kind === "provider-download") {
+  if (value.kind === "provider-submit") {
     return { kind: value.kind, taskId: requireTaskId(value.taskId) };
   }
   if (
@@ -99,6 +101,19 @@ export function parseVideoGenerationJob(value: unknown): VideoGenerationJob {
       pollVersion: Number(value.pollVersion)
     };
   }
+  if (
+    value.kind === "provider-download" &&
+    typeof value.providerTaskId === "string" &&
+    Number.isSafeInteger(value.downloadVersion) &&
+    Number(value.downloadVersion) > 0
+  ) {
+    return {
+      kind: value.kind,
+      taskId: requireTaskId(value.taskId),
+      providerTaskId: requireProviderTaskId(value.providerTaskId),
+      downloadVersion: Number(value.downloadVersion)
+    };
+  }
   throw new Error("Invalid Provider job payload.");
 }
 
@@ -109,8 +124,16 @@ export function providerJobId(job: VideoGenerationJob): string {
     case "provider-poll":
       return `provider-poll-${job.taskId}-v${job.pollVersion}`;
     case "provider-download":
-      return `provider-download-${job.taskId}`;
+      return `provider-download-${job.taskId}-v${job.downloadVersion}`;
   }
+}
+
+function requireProviderTaskId(value: string): string {
+  const providerTaskId = value.trim();
+  if (providerTaskId.length === 0 || providerTaskId.length > 256) {
+    throw new Error("Invalid Provider job Provider task ID.");
+  }
+  return providerTaskId;
 }
 
 function requireTaskId(value: string): string {

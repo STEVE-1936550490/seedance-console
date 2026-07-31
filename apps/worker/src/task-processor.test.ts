@@ -12,6 +12,7 @@ import {
   type ProviderCapabilities,
   type ProviderDownload,
   type ProviderTaskSnapshot,
+  type ProviderUsage,
   type SeedanceProvider,
   type ValidationResult
 } from "@seedance/seedance-provider";
@@ -19,6 +20,8 @@ import {
 import type { ProviderJobScheduler } from "./job-scheduler.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import type {
+  DownloadClaim,
+  DownloadSchedule,
   InitialPollSchedule,
   NextPollSchedule,
   PollClaim,
@@ -38,7 +41,8 @@ const policy: PollingPolicy = {
   maxIntervalMs: 8_000,
   maxDurationMs: 60_000,
   requestTimeoutMs: 5_000,
-  jitterRatio: 0.1
+  jitterRatio: 0.1,
+  downloadMaxDurationMs: 60_000
 };
 
 describe("split Provider submit and poll processing", () => {
@@ -444,6 +448,9 @@ type MemoryTask = SubmissionTask & {
   lastProviderStatus: string | null;
   lastPollError: string | null;
   downloadPending: boolean;
+  downloadVersion: number;
+  nextDownloadAt: Date | null;
+  downloadDeadlineAt: Date | null;
   errorCode: string | null;
 };
 
@@ -477,6 +484,9 @@ class MemoryTaskStore implements TaskStore {
     lastProviderStatus: null,
     lastPollError: null,
     downloadPending: false,
+    downloadVersion: 0,
+    nextDownloadAt: null,
+    downloadDeadlineAt: null,
     errorCode: null
   };
 
@@ -582,9 +592,12 @@ class MemoryTaskStore implements TaskStore {
   async markDownloadPending(
     claim: PollClaim,
     now: Date,
+    downloadDeadlineAt: Date,
+    _providerName: string,
+    _usage: readonly ProviderUsage[],
     providerStatus?: string
-  ): Promise<boolean> {
-    if (!this.isCurrentClaim(claim)) return false;
+  ): Promise<DownloadSchedule | null> {
+    if (!this.isCurrentClaim(claim)) return null;
     Object.assign(this.task, {
       pollAttempt: this.task.pollAttempt + 1,
       nextPollAt: null,
@@ -592,9 +605,17 @@ class MemoryTaskStore implements TaskStore {
       pollLeaseUntil: null,
       lastProviderStatus: providerStatus ?? null,
       lastPollError: null,
-      downloadPending: true
+      downloadPending: true,
+      downloadVersion: 1,
+      nextDownloadAt: now,
+      downloadDeadlineAt
     });
-    return true;
+    return {
+      taskId: this.task.id,
+      providerTaskId: claim.providerTaskId,
+      downloadVersion: 1,
+      nextDownloadAt: now
+    };
   }
 
   async markProviderFailed(
@@ -663,11 +684,44 @@ class MemoryTaskStore implements TaskStore {
       : [];
   }
 
-  async findPendingDownloads(): Promise<readonly string[]> {
+  async findPendingDownloads(): Promise<readonly DownloadSchedule[]> {
     return this.task.status === TaskStatus.PROCESSING &&
-      this.task.downloadPending
-      ? [this.task.id]
+      this.task.downloadPending &&
+      this.task.providerTaskId !== null &&
+      this.task.nextDownloadAt !== null
+      ? [
+          {
+            taskId: this.task.id,
+            providerTaskId: this.task.providerTaskId,
+            downloadVersion: this.task.downloadVersion,
+            nextDownloadAt: this.task.nextDownloadAt
+          }
+        ]
       : [];
+  }
+
+  async claimDownload(): Promise<DownloadClaim | null> {
+    return null;
+  }
+
+  async loadVideoOutput(): Promise<null> {
+    return null;
+  }
+
+  async persistVideoOutputAndComplete(): Promise<boolean> {
+    return false;
+  }
+
+  async invalidateVideoOutput(): Promise<null> {
+    return null;
+  }
+
+  async scheduleDownloadRetry(): Promise<boolean> {
+    return false;
+  }
+
+  async stopDownload(): Promise<boolean> {
+    return false;
   }
 
   private isCurrentClaim(claim: PollClaim): boolean {
@@ -702,7 +756,15 @@ class MemoryScheduler implements ProviderJobScheduler {
     this.polls.push({ taskId, pollVersion, runAt });
   }
 
-  async scheduleDownload(taskId: string): Promise<void> {
+  async scheduleDownload(
+    taskId: string,
+    providerTaskId: string,
+    downloadVersion: number,
+    runAt: Date
+  ): Promise<void> {
+    void providerTaskId;
+    void downloadVersion;
+    void runAt;
     this.downloads.push(taskId);
   }
 }

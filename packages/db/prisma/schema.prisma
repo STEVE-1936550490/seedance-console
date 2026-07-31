@@ -61,15 +61,26 @@ model VideoTask {
   lastProviderStatus  String?
   lastPollError       String?
   downloadPending     Boolean             @default(false)
+  downloadStartedAt   DateTime?
+  nextDownloadAt      DateTime?
+  lastDownloadAt      DateTime?
+  downloadDeadlineAt  DateTime?
+  downloadLeaseUntil  DateTime?
+  downloadVersion     Int                 @default(0)
+  downloadAttempt     Int                 @default(0)
+  downloadErrors      Int                 @default(0)
+  lastDownloadError   String?
   events              TaskEvent[]
   assets              TaskAsset[]
   usageRecords        UsageRecord[]
   submission          ProviderSubmission?
+  videoOutput         VideoOutput?
 
   @@unique([provider, providerTaskId])
   @@index([status, createdAt])
   @@index([status, nextPollAt])
   @@index([status, downloadPending])
+  @@index([status, nextDownloadAt])
 }
 
 model ProviderSubmission {
@@ -91,15 +102,32 @@ model ProviderSubmission {
 }
 
 model Asset {
-  id           String      @id @default(cuid())
+  id           String       @id @default(cuid())
   kind         AssetKind
-  storageKey   String      @unique
+  storageKey   String       @unique
   originalName String
   mimeType     String
   sizeBytes    BigInt
   checksum     String?
-  createdAt    DateTime    @default(now())
+  createdAt    DateTime     @default(now())
   tasks        TaskAsset[]
+  videoOutput  VideoOutput?
+}
+
+model VideoOutput {
+  id             String    @id @default(cuid())
+  taskId         String    @unique
+  assetId        String    @unique
+  providerTaskId String
+  storageKey     String    @unique
+  sha256         String
+  fileSize       BigInt
+  mimeType       String
+  createdAt      DateTime  @default(now())
+  task           VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  asset          Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([providerTaskId])
 }
 
 model TaskAsset {

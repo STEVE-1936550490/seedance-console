@@ -14,6 +14,8 @@ import {
 } from "./bridge-contract.js";
 import {
   ProviderAuthenticationError,
+  ProviderDownloadValidationError,
+  ProviderOutputExpiredError,
   ProviderOutcomeUnknownError,
   ProviderProtocolError,
   ProviderRateLimitError,
@@ -171,8 +173,7 @@ export class SeedanceBridgeClient {
     const contentType = response.headers.get("content-type")?.split(";")[0];
     if (contentType === undefined || !contentType.startsWith("video/")) {
       await response.body.cancel();
-      throw new ProviderProtocolError(
-        "DOWNLOAD",
+      throw new ProviderDownloadValidationError(
         "Bridge output response has an invalid content type."
       );
     }
@@ -229,6 +230,8 @@ export class SeedanceBridgeClient {
     } catch (error) {
       if (
         error instanceof ProviderAuthenticationError ||
+        error instanceof ProviderDownloadValidationError ||
+        error instanceof ProviderOutputExpiredError ||
         error instanceof ProviderRateLimitError ||
         error instanceof ProviderProtocolError ||
         error instanceof ProviderRequestError ||
@@ -281,6 +284,9 @@ export class SeedanceBridgeClient {
         contractRetryAfter ??
           parseRetryAfter(response.headers.get("retry-after"))
       );
+    }
+    if (operation === "DOWNLOAD" && response.status === 410) {
+      throw new ProviderOutputExpiredError();
     }
     if (response.status >= 500) {
       if (operation === "CREATE") {

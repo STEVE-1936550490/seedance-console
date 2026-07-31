@@ -6,7 +6,9 @@ Worker 队列使用三个互斥任务类型：
 
 - `provider-submit`：只抢占提交权、创建或恢复 Provider task ID，并持久化首次轮询计划。
 - `provider-poll`：携带 `taskId + pollVersion`，每次最多查询 Provider 一次。
-- `provider-download`：Provider 输出就绪后的独立边界。当前只保留已有 Mock 下载兼容实现；真实输出的原子写入和完整校验属于下一阶段。
+- `provider-download`：携带 `taskId + providerTaskId + downloadVersion`，
+  负责安全流式下载、校验、原子提交和数据库恢复；详见
+  [Provider 输出下载与恢复](DOWNLOAD_SAFETY.md)。
 
 Job 不携带提示词、素材 URL、Provider 响应、下载 URL 或凭据。
 
@@ -27,6 +29,9 @@ Job 不携带提示词、素材 URL、Provider 响应、下载 URL 或凭据。
 | `lastProviderStatus`  | 脱敏、截断后的最后 Provider 状态           |
 | `lastPollError`       | 稳定内部错误码，不保存原始响应             |
 | `downloadPending`     | Provider 输出已就绪、等待独立下载任务      |
+
+下载阶段使用独立的 `downloadVersion + downloadLeaseUntil`，不会复用或推进
+`pollVersion`。Provider 成功后 `nextPollAt` 被清空，下载重试不重新进入轮询。
 
 所有旧任务的 `nextPollAt`、`pollStartedAt` 和 `pollDeadlineAt` 均为
 `NULL`，因此升级后不会被协调器误识别为待恢复任务。

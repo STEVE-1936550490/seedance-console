@@ -36,7 +36,8 @@ const policy = {
   maxIntervalMs: 2_000,
   maxDurationMs: 60_000,
   requestTimeoutMs: 2_000,
-  jitterRatio: 0
+  jitterRatio: 0,
+  downloadMaxDurationMs: 60_000
 };
 const redisConnections = new Set();
 

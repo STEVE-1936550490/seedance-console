@@ -1,10 +1,4 @@
-import {
-  AssetKind,
-  AssetRole,
-  Prisma,
-  TaskStatus,
-  type PrismaClient
-} from "@prisma/client";
+import { TaskStatus } from "@prisma/client";
 
 import {
   ProviderOperationError,
@@ -13,8 +7,6 @@ import {
   type ProviderTaskSnapshot,
   type SeedanceProvider
 } from "@seedance/seedance-provider";
-import type { Storage } from "@seedance/storage";
-
 import type { ProviderJobScheduler } from "./job-scheduler.js";
 import type { PollClaim, SubmissionTask, TaskStore } from "./task-store.js";
 
@@ -24,6 +16,7 @@ export interface PollingPolicy {
   maxDurationMs: number;
   requestTimeoutMs: number;
   jitterRatio: number;
+  downloadMaxDurationMs: number;
 }
 
 interface ProcessorDependencies {
@@ -117,117 +110,6 @@ export function createPollProcessor(dependencies: ProcessorDependencies) {
   };
 }
 
-export interface DownloadProcessorDependencies {
-  prisma: PrismaClient;
-  provider: SeedanceProvider;
-  storage: Storage;
-  now?: () => Date;
-}
-
-/**
- * Mock-compatible download boundary. Real Provider hardening (atomic temporary
- * files, size/MIME/signature checks, and recovery) remains stage 6 work.
- */
-export function createDownloadProcessor(
-  dependencies: DownloadProcessorDependencies
-) {
-  const now = dependencies.now ?? (() => new Date());
-  return async (taskId: string): Promise<void> => {
-    const task = await dependencies.prisma.videoTask.findUnique({
-      where: { id: taskId }
-    });
-    if (
-      task === null ||
-      task.status !== TaskStatus.PROCESSING ||
-      !task.downloadPending ||
-      task.providerTaskId === null
-    ) {
-      return;
-    }
-
-    const snapshot = await dependencies.provider.getTask(task.providerTaskId);
-    if (snapshot.status !== "SUCCEEDED") {
-      throw new ProviderProtocolError(
-        "DOWNLOAD",
-        "Provider output is no longer ready."
-      );
-    }
-    const existingOutput = await dependencies.prisma.taskAsset.findFirst({
-      where: { taskId, role: AssetRole.GENERATED_VIDEO }
-    });
-    if (existingOutput !== null) return;
-
-    const storageKey = `outputs/${taskId}.mp4`;
-    const stored = await dependencies.storage
-      .stat(storageKey)
-      .catch(async () => {
-        const output = await dependencies.provider.downloadOutput(
-          task.providerTaskId as string,
-          { kind: "video" }
-        );
-        return dependencies.storage.put(storageKey, output.body);
-      });
-
-    await dependencies.prisma.$transaction(async (transaction) => {
-      const asset = await transaction.asset.create({
-        data: {
-          kind: AssetKind.OUTPUT_VIDEO,
-          storageKey,
-          originalName: `${taskId}.mp4`,
-          mimeType: "video/mp4",
-          sizeBytes: stored.sizeBytes
-        }
-      });
-      await transaction.taskAsset.create({
-        data: {
-          taskId,
-          assetId: asset.id,
-          role: AssetRole.GENERATED_VIDEO
-        }
-      });
-      if (snapshot.usage.length > 0) {
-        await transaction.usageRecord.createMany({
-          data: snapshot.usage.map((usage) => ({
-            taskId,
-            provider: dependencies.provider.name,
-            metric: usage.metric,
-            quantity: new Prisma.Decimal(usage.quantity),
-            unit: usage.unit,
-            raw: {
-              source: dependencies.provider.name,
-              testOnly: dependencies.provider.name === "mock"
-            }
-          }))
-        });
-      }
-      const completed = await transaction.videoTask.updateMany({
-        where: {
-          id: taskId,
-          status: TaskStatus.PROCESSING,
-          downloadPending: true,
-          providerTaskId: task.providerTaskId
-        },
-        data: {
-          status: TaskStatus.SUCCEEDED,
-          downloadPending: false,
-          completedAt: now()
-        }
-      });
-      if (completed.count !== 1) {
-        throw new TaskNoLongerDownloadableError();
-      }
-      await transaction.taskEvent.create({
-        data: {
-          taskId,
-          fromStatus: TaskStatus.PROCESSING,
-          toStatus: TaskStatus.SUCCEEDED,
-          reason: "OUTPUT_STORED"
-        }
-      });
-    });
-  };
-}
-
 async function createOrRecoverProviderTask(
   dependencies: ProcessorDependencies,
   task: SubmissionTask
@@ -294,14 +176,22 @@ async function handleSnapshot(
           "Succeeded Provider task has no available video output."
         );
       }
-      const updated = await dependencies.store.markDownloadPending(
+      const schedule = await dependencies.store.markDownloadPending(
         claim,
         currentTime,
+        addMilliseconds(currentTime, dependencies.policy.downloadMaxDurationMs),
+        dependencies.provider.name,
+        snapshot.usage,
         providerStatus
       );
-      if (updated) {
+      if (schedule !== null) {
         await dependencies.scheduler
-          .scheduleDownload(claim.taskId)
+          .scheduleDownload(
+            schedule.taskId,
+            schedule.providerTaskId,
+            schedule.downloadVersion,
+            schedule.nextDownloadAt
+          )
           .catch(() => undefined);
       }
       return;
@@ -402,5 +292,3 @@ function isTerminal(status: TaskStatus): boolean {
     status === TaskStatus.EXPIRED
   );
 }
-
-class TaskNoLongerDownloadableError extends Error {}

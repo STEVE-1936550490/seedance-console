@@ -139,6 +139,30 @@ export class ProviderProtocolError extends ProviderOperationError {
   }
 }
 
+export class ProviderOutputExpiredError extends ProviderOperationError {
+  constructor() {
+    super({
+      code: "PROVIDER_OUTPUT_EXPIRED",
+      operation: "DOWNLOAD",
+      retry: "NEVER",
+      safeMessage: "Provider output is no longer available."
+    });
+    this.name = "ProviderOutputExpiredError";
+  }
+}
+
+export class ProviderDownloadValidationError extends ProviderOperationError {
+  constructor(safeMessage = "Provider output failed validation.") {
+    super({
+      code: "PROVIDER_OUTPUT_INVALID",
+      operation: "DOWNLOAD",
+      retry: "NEVER",
+      safeMessage
+    });
+    this.name = "ProviderDownloadValidationError";
+  }
+}
+
 export class ProviderRequestError extends ProviderOperationError {
   constructor(operation: ProviderOperation, statusCode: number) {
     super({

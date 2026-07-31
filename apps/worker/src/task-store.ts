@@ -1,10 +1,12 @@
 import {
+  AssetKind,
   AssetRole,
+  Prisma,
   ProviderSubmissionStatus,
   TaskStatus,
-  type Prisma,
   type PrismaClient
 } from "@prisma/client";
+import type { ProviderUsage } from "@seedance/seedance-provider";
 
 export interface SubmissionTask {
   id: string;
@@ -50,6 +52,34 @@ export interface RecoverablePoll {
   nextPollAt: Date;
 }
 
+export interface DownloadSchedule {
+  taskId: string;
+  providerTaskId: string;
+  downloadVersion: number;
+  nextDownloadAt: Date;
+}
+
+export interface DownloadClaim {
+  taskId: string;
+  providerTaskId: string;
+  downloadVersion: number;
+  downloadAttempt: number;
+  downloadErrors: number;
+  downloadDeadlineAt: Date;
+  leaseUntil: Date;
+}
+
+export interface VideoOutputMetadata {
+  storageKey: string;
+  sha256: string;
+  fileSize: number;
+  mimeType: string;
+}
+
+export interface StoredVideoOutput extends VideoOutputMetadata {
+  assetId: string;
+}
+
 export interface TaskStore {
   loadSubmissionTask(taskId: string): Promise<SubmissionTask | null>;
   claimSubmission(task: SubmissionTask): Promise<boolean>;
@@ -72,8 +102,11 @@ export interface TaskStore {
   markDownloadPending(
     claim: PollClaim,
     now: Date,
+    downloadDeadlineAt: Date,
+    providerName: string,
+    usage: readonly ProviderUsage[],
     providerStatus?: string
-  ): Promise<boolean>;
+  ): Promise<DownloadSchedule | null>;
   markProviderFailed(
     claim: PollClaim,
     now: Date,
@@ -91,7 +124,36 @@ export interface TaskStore {
     now: Date,
     limit: number
   ): Promise<readonly RecoverablePoll[]>;
-  findPendingDownloads(limit: number): Promise<readonly string[]>;
+  findPendingDownloads(
+    now: Date,
+    limit: number
+  ): Promise<readonly DownloadSchedule[]>;
+  claimDownload(
+    taskId: string,
+    providerTaskId: string,
+    downloadVersion: number,
+    now: Date,
+    leaseUntil: Date
+  ): Promise<DownloadClaim | null>;
+  loadVideoOutput(taskId: string): Promise<StoredVideoOutput | null>;
+  persistVideoOutputAndComplete(
+    claim: DownloadClaim,
+    output: VideoOutputMetadata,
+    now: Date
+  ): Promise<boolean>;
+  invalidateVideoOutput(claim: DownloadClaim): Promise<string | null>;
+  scheduleDownloadRetry(
+    claim: DownloadClaim,
+    now: Date,
+    nextDownloadAt: Date,
+    errorCode: string
+  ): Promise<boolean>;
+  stopDownload(
+    claim: DownloadClaim,
+    now: Date,
+    errorCode: string,
+    errorMessage: string
+  ): Promise<boolean>;
 }
 
 export class PrismaTaskStore implements TaskStore {
@@ -335,8 +397,11 @@ export class PrismaTaskStore implements TaskStore {
   async markDownloadPending(
     claim: PollClaim,
     now: Date,
+    downloadDeadlineAt: Date,
+    providerName: string,
+    usage: readonly ProviderUsage[],
     providerStatus?: string
-  ): Promise<boolean> {
+  ): Promise<DownloadSchedule | null> {
     return this.prisma.$transaction(async (transaction) => {
       const updated = await transaction.videoTask.updateMany({
         where: pollClaimWhere(claim),
@@ -347,10 +412,34 @@ export class PrismaTaskStore implements TaskStore {
           pollLeaseUntil: null,
           lastProviderStatus: providerStatus ?? null,
           lastPollError: null,
-          downloadPending: true
+          downloadPending: true,
+          downloadStartedAt: now,
+          nextDownloadAt: now,
+          downloadDeadlineAt,
+          downloadLeaseUntil: null,
+          downloadVersion: 1,
+          downloadAttempt: 0,
+          downloadErrors: 0,
+          lastDownloadAt: null,
+          lastDownloadError: null
         }
       });
-      if (updated.count !== 1) return false;
+      if (updated.count !== 1) return null;
+      if (usage.length > 0) {
+        await transaction.usageRecord.createMany({
+          data: usage.map((record) => ({
+            taskId: claim.taskId,
+            provider: providerName,
+            metric: record.metric,
+            quantity: new Prisma.Decimal(record.quantity),
+            unit: record.unit,
+            raw: {
+              source: providerName,
+              testOnly: providerName === "mock"
+            }
+          }))
+        });
+      }
       await transaction.taskEvent.create({
         data: {
           taskId: claim.taskId,
@@ -359,7 +448,12 @@ export class PrismaTaskStore implements TaskStore {
           reason: "PROVIDER_OUTPUT_READY"
         }
       });
-      return true;
+      return {
+        taskId: claim.taskId,
+        providerTaskId: claim.providerTaskId,
+        downloadVersion: 1,
+        nextDownloadAt: now
+      };
     });
   }
 
@@ -488,18 +582,269 @@ export class PrismaTaskStore implements TaskStore {
     );
   }
 
-  async findPendingDownloads(limit: number): Promise<readonly string[]> {
+  async findPendingDownloads(
+    now: Date,
+    limit: number
+  ): Promise<readonly DownloadSchedule[]> {
     const tasks = await this.prisma.videoTask.findMany({
       where: {
         status: TaskStatus.PROCESSING,
         providerTaskId: { not: null },
-        downloadPending: true
+        downloadPending: true,
+        downloadVersion: { gt: 0 },
+        nextDownloadAt: { lte: now },
+        OR: [{ downloadLeaseUntil: null }, { downloadLeaseUntil: { lte: now } }]
       },
-      select: { id: true },
-      orderBy: { updatedAt: "asc" },
+      select: {
+        id: true,
+        providerTaskId: true,
+        downloadVersion: true,
+        nextDownloadAt: true
+      },
+      orderBy: { nextDownloadAt: "asc" },
       take: limit
     });
-    return tasks.map((task) => task.id);
+    return tasks.flatMap((task) =>
+      task.providerTaskId === null || task.nextDownloadAt === null
+        ? []
+        : [
+            {
+              taskId: task.id,
+              providerTaskId: task.providerTaskId,
+              downloadVersion: task.downloadVersion,
+              nextDownloadAt: task.nextDownloadAt
+            }
+          ]
+    );
+  }
+
+  async claimDownload(
+    taskId: string,
+    providerTaskId: string,
+    downloadVersion: number,
+    now: Date,
+    leaseUntil: Date
+  ): Promise<DownloadClaim | null> {
+    const task = await this.prisma.videoTask.findUnique({
+      where: { id: taskId },
+      select: {
+        status: true,
+        providerTaskId: true,
+        downloadPending: true,
+        downloadVersion: true,
+        downloadAttempt: true,
+        downloadErrors: true,
+        downloadDeadlineAt: true,
+        nextDownloadAt: true
+      }
+    });
+    if (
+      task === null ||
+      task.status !== TaskStatus.PROCESSING ||
+      !task.downloadPending ||
+      task.providerTaskId !== providerTaskId ||
+      task.downloadVersion !== downloadVersion ||
+      task.downloadDeadlineAt === null ||
+      task.nextDownloadAt === null ||
+      task.nextDownloadAt > now
+    ) {
+      return null;
+    }
+    const claimed = await this.prisma.videoTask.updateMany({
+      where: {
+        id: taskId,
+        status: TaskStatus.PROCESSING,
+        providerTaskId,
+        downloadPending: true,
+        downloadVersion,
+        nextDownloadAt: { lte: now },
+        OR: [{ downloadLeaseUntil: null }, { downloadLeaseUntil: { lte: now } }]
+      },
+      data: { downloadLeaseUntil: leaseUntil }
+    });
+    if (claimed.count !== 1) return null;
+    return {
+      taskId,
+      providerTaskId,
+      downloadVersion,
+      downloadAttempt: task.downloadAttempt,
+      downloadErrors: task.downloadErrors,
+      downloadDeadlineAt: task.downloadDeadlineAt,
+      leaseUntil
+    };
+  }
+
+  async loadVideoOutput(taskId: string): Promise<StoredVideoOutput | null> {
+    const output = await this.prisma.videoOutput.findUnique({
+      where: { taskId }
+    });
+    return output === null
+      ? null
+      : {
+          assetId: output.assetId,
+          storageKey: output.storageKey,
+          sha256: output.sha256,
+          fileSize: Number(output.fileSize),
+          mimeType: output.mimeType
+        };
+  }
+
+  persistVideoOutputAndComplete(
+    claim: DownloadClaim,
+    output: VideoOutputMetadata,
+    now: Date
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const asset = await transaction.asset.upsert({
+        where: { storageKey: output.storageKey },
+        create: {
+          kind: AssetKind.OUTPUT_VIDEO,
+          storageKey: output.storageKey,
+          originalName: `${claim.taskId}.mp4`,
+          mimeType: output.mimeType,
+          sizeBytes: output.fileSize,
+          checksum: output.sha256
+        },
+        update: {
+          mimeType: output.mimeType,
+          sizeBytes: output.fileSize,
+          checksum: output.sha256
+        }
+      });
+      await transaction.taskAsset.upsert({
+        where: {
+          taskId_assetId_role: {
+            taskId: claim.taskId,
+            assetId: asset.id,
+            role: AssetRole.GENERATED_VIDEO
+          }
+        },
+        create: {
+          taskId: claim.taskId,
+          assetId: asset.id,
+          role: AssetRole.GENERATED_VIDEO
+        },
+        update: {}
+      });
+      await transaction.videoOutput.upsert({
+        where: { taskId: claim.taskId },
+        create: {
+          taskId: claim.taskId,
+          assetId: asset.id,
+          providerTaskId: claim.providerTaskId,
+          ...output
+        },
+        update: {
+          assetId: asset.id,
+          providerTaskId: claim.providerTaskId,
+          ...output
+        }
+      });
+      const completed = await transaction.videoTask.updateMany({
+        where: downloadClaimWhere(claim),
+        data: {
+          status: TaskStatus.SUCCEEDED,
+          downloadPending: false,
+          nextDownloadAt: null,
+          downloadLeaseUntil: null,
+          lastDownloadAt: now,
+          lastDownloadError: null,
+          completedAt: now,
+          errorCode: null,
+          errorMessage: null
+        }
+      });
+      if (completed.count !== 1) {
+        throw new TaskNoLongerDownloadableError();
+      }
+      await transaction.taskEvent.create({
+        data: {
+          taskId: claim.taskId,
+          fromStatus: TaskStatus.PROCESSING,
+          toStatus: TaskStatus.SUCCEEDED,
+          reason: "OUTPUT_STORED"
+        }
+      });
+      return true;
+    });
+  }
+
+  invalidateVideoOutput(claim: DownloadClaim): Promise<string | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const active = await transaction.videoTask.count({
+        where: downloadClaimWhere(claim)
+      });
+      if (active !== 1) return null;
+      const output = await transaction.videoOutput.findUnique({
+        where: { taskId: claim.taskId }
+      });
+      if (output === null) return null;
+      await transaction.videoOutput.delete({ where: { id: output.id } });
+      await transaction.taskAsset.deleteMany({
+        where: {
+          taskId: claim.taskId,
+          assetId: output.assetId,
+          role: AssetRole.GENERATED_VIDEO
+        }
+      });
+      await transaction.asset.delete({ where: { id: output.assetId } });
+      return output.storageKey;
+    });
+  }
+
+  async scheduleDownloadRetry(
+    claim: DownloadClaim,
+    now: Date,
+    nextDownloadAt: Date,
+    errorCode: string
+  ): Promise<boolean> {
+    const updated = await this.prisma.videoTask.updateMany({
+      where: downloadClaimWhere(claim),
+      data: {
+        downloadVersion: { increment: 1 },
+        downloadAttempt: { increment: 1 },
+        downloadErrors: { increment: 1 },
+        nextDownloadAt,
+        downloadLeaseUntil: null,
+        lastDownloadAt: now,
+        lastDownloadError: errorCode,
+        errorCode,
+        errorMessage: "Video download will be retried."
+      }
+    });
+    return updated.count === 1;
+  }
+
+  stopDownload(
+    claim: DownloadClaim,
+    now: Date,
+    errorCode: string,
+    errorMessage: string
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.videoTask.updateMany({
+        where: downloadClaimWhere(claim),
+        data: {
+          downloadAttempt: { increment: 1 },
+          nextDownloadAt: null,
+          downloadLeaseUntil: null,
+          lastDownloadAt: now,
+          lastDownloadError: errorCode,
+          errorCode,
+          errorMessage
+        }
+      });
+      if (updated.count !== 1) return false;
+      await transaction.taskEvent.create({
+        data: {
+          taskId: claim.taskId,
+          fromStatus: TaskStatus.PROCESSING,
+          toStatus: TaskStatus.PROCESSING,
+          reason: errorCode
+        }
+      });
+      return true;
+    });
   }
 }
 
@@ -513,3 +858,16 @@ function pollClaimWhere(claim: PollClaim) {
     downloadPending: false
   } satisfies Prisma.VideoTaskWhereInput;
 }
+
+function downloadClaimWhere(claim: DownloadClaim) {
+  return {
+    id: claim.taskId,
+    status: TaskStatus.PROCESSING,
+    providerTaskId: claim.providerTaskId,
+    downloadPending: true,
+    downloadVersion: claim.downloadVersion,
+    downloadLeaseUntil: claim.leaseUntil
+  } satisfies Prisma.VideoTaskWhereInput;
+}
+
+class TaskNoLongerDownloadableError extends Error {}

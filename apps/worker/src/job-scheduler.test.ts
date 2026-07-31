@@ -19,7 +19,12 @@ describe("BullMQ Provider job scheduling", () => {
       4,
       new Date("2026-07-31T00:00:03.000Z")
     );
-    await scheduler.scheduleDownload("task-1");
+    await scheduler.scheduleDownload(
+      "task-1",
+      "provider-task-1",
+      2,
+      new Date("2026-07-31T00:00:05.000Z")
+    );
 
     expect(add).toHaveBeenNthCalledWith(
       1,
@@ -40,10 +45,13 @@ describe("BullMQ Provider job scheduling", () => {
       "provider-download",
       {
         kind: "provider-download",
-        taskId: "task-1"
+        taskId: "task-1",
+        providerTaskId: "provider-task-1",
+        downloadVersion: 2
       },
       expect.objectContaining({
-        jobId: "provider-download-task-1",
+        jobId: "provider-download-task-1-v2",
+        delay: 5_000,
         attempts: 1
       })
     );

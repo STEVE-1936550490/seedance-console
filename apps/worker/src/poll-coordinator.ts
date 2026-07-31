@@ -19,7 +19,10 @@ export function createPollCoordinator(
         currentTime,
         dependencies.batchSize
       ),
-      dependencies.store.findPendingDownloads(dependencies.batchSize)
+      dependencies.store.findPendingDownloads(
+        currentTime,
+        dependencies.batchSize
+      )
     ]);
     await Promise.all([
       ...polls.map((poll) =>
@@ -29,8 +32,13 @@ export function createPollCoordinator(
           poll.nextPollAt
         )
       ),
-      ...downloads.map((taskId) =>
-        dependencies.scheduler.scheduleDownload(taskId)
+      ...downloads.map((download) =>
+        dependencies.scheduler.scheduleDownload(
+          download.taskId,
+          download.providerTaskId,
+          download.downloadVersion,
+          download.nextDownloadAt
+        )
       )
     ]);
   };
