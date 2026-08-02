@@ -231,7 +231,7 @@ services:
       NODE_ENV: production
       API_INTERNAL_URL: http://api:43171
     ports:
-      - "${WEB_PORT:-43170}:43170"
+      - "127.0.0.1:${WEB_PORT:-43170}:43170"
     depends_on:
       api:
         condition: service_healthy
