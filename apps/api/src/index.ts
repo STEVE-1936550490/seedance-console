@@ -1,10 +1,14 @@
 import { resolve } from "node:path";
 
-import { loadApiConfig, loadLocalEnvironment } from "@seedance/config";
+import {
+  hasAssetPublishingConfig,
+  loadApiConfig,
+  loadLocalEnvironment
+} from "@seedance/config";
 import { prisma } from "@seedance/db";
 import { createProviderDefinition } from "@seedance/seedance-provider";
 import { videoQueueName, type VideoGenerationJob } from "@seedance/shared";
-import { LocalStorage } from "@seedance/storage";
+import { LocalStorage, SignedAssetPublisher } from "@seedance/storage";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 
@@ -45,13 +49,55 @@ const provider =
         modelId: requireSeedanceModelId(config.SEEDANCE_MODEL_ID)
       });
 const storage = new LocalStorage(resolve(process.cwd(), config.STORAGE_ROOT));
+const assetPublisher = hasAssetPublishingConfig(config)
+  ? new SignedAssetPublisher({
+      signingKey: config.SEEDANCE_ASSET_SIGNING_KEY,
+      publicBaseUrl: config.SEEDANCE_ASSET_PUBLIC_BASE_URL,
+      urlTtlMs: config.SEEDANCE_ASSET_URL_TTL_MS,
+      maxBytes: config.SEEDANCE_ASSET_MAX_BYTES,
+      videoMaxBytes: config.APP_VIDEO_MAX_BYTES,
+      videoInspectionPolicy: {
+        minDurationSeconds: 2,
+        maxDurationSeconds: 15,
+        ffprobePath: config.FFPROBE_PATH
+      },
+      storage,
+      loadAsset: async (assetId) => {
+        const asset = await prisma.asset.findUnique({
+          where: { id: assetId }
+        });
+        return asset === null
+          ? null
+          : {
+              id: asset.id,
+              kind: asset.kind,
+              storageKey: asset.storageKey,
+              mimeType: asset.mimeType,
+              sizeBytes: Number(asset.sizeBytes),
+              checksum: asset.checksum,
+              durationMs: asset.durationMs,
+              width: asset.width,
+              height: asset.height,
+              codec: asset.codec,
+              pixelFormat: asset.pixelFormat,
+              frameRate: asset.frameRate,
+              hasAudio: asset.hasAudio
+            };
+      }
+    })
+  : undefined;
 
 await registerMvpRoutes(server, {
   prisma,
   provider,
   taskQueue,
   storage,
-  uploadMaxBytes: config.UPLOAD_MAX_BYTES
+  uploadMaxBytes: config.UPLOAD_MAX_BYTES,
+  appVideoMaxBytes: config.APP_VIDEO_MAX_BYTES,
+  ffprobePath: config.FFPROBE_PATH,
+  assetPublishingConfigured:
+    config.ASSET_PUBLISHER === "eos" || assetPublisher !== undefined,
+  ...(assetPublisher === undefined ? {} : { assetPublisher })
 });
 
 const close = async (): Promise<void> => {

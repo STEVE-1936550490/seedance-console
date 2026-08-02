@@ -19,6 +19,20 @@ export interface ProviderOperationErrorOptions {
   statusCode?: number;
   retryAfterMs?: number;
   cause?: unknown;
+  audit?: ProviderCreateAudit;
+}
+
+export interface ProviderCreateAudit {
+  bridgeRequestId?: string | undefined;
+  requestStartedAt?: string | undefined;
+  requestEndedAt?: string | undefined;
+  failureStage?: string | undefined;
+  exceptionType?: string | undefined;
+  requestBodySent?: boolean | undefined;
+  providerHttpStatus?: number | undefined;
+  providerErrorCode?: string | undefined;
+  providerRequestId?: string | undefined;
+  providerTraceId?: string | undefined;
 }
 
 export class ProviderOperationError extends Error {
@@ -27,6 +41,7 @@ export class ProviderOperationError extends Error {
   readonly retry: ProviderRetry;
   readonly statusCode?: number;
   readonly retryAfterMs?: number;
+  readonly audit: ProviderCreateAudit | undefined;
 
   constructor(options: ProviderOperationErrorOptions) {
     super(options.safeMessage, { cause: options.cause });
@@ -40,6 +55,7 @@ export class ProviderOperationError extends Error {
     if (options.retryAfterMs !== undefined) {
       this.retryAfterMs = options.retryAfterMs;
     }
+    this.audit = options.audit;
   }
 
   get retryable(): boolean {
@@ -115,15 +131,30 @@ export class ProviderTransientError extends ProviderOperationError {
 }
 
 export class ProviderOutcomeUnknownError extends ProviderOperationError {
-  constructor(cause?: unknown) {
+  constructor(cause?: unknown, audit?: ProviderCreateAudit) {
     super({
       code: "PROVIDER_CREATE_OUTCOME_UNKNOWN",
       operation: "CREATE",
       retry: "MANUAL_RECONCILIATION",
       safeMessage: "Provider create outcome is unknown.",
-      ...(cause === undefined ? {} : { cause })
+      ...(cause === undefined ? {} : { cause }),
+      ...(audit === undefined ? {} : { audit })
     });
     this.name = "ProviderOutcomeUnknownError";
+  }
+}
+
+export class ProviderCreateNotSentError extends ProviderOperationError {
+  constructor(cause?: unknown, audit?: ProviderCreateAudit) {
+    super({
+      code: "PROVIDER_CREATE_NOT_SENT",
+      operation: "CREATE",
+      retry: "NEVER",
+      safeMessage: "Provider create was not sent.",
+      ...(cause === undefined ? {} : { cause }),
+      ...(audit === undefined ? {} : { audit })
+    });
+    this.name = "ProviderCreateNotSentError";
   }
 }
 
@@ -164,13 +195,18 @@ export class ProviderDownloadValidationError extends ProviderOperationError {
 }
 
 export class ProviderRequestError extends ProviderOperationError {
-  constructor(operation: ProviderOperation, statusCode: number) {
+  constructor(
+    operation: ProviderOperation,
+    statusCode: number,
+    audit?: ProviderCreateAudit
+  ) {
     super({
       code: "PROVIDER_REQUEST_REJECTED",
       operation,
       retry: "NEVER",
       safeMessage: "Provider request was rejected.",
-      statusCode
+      statusCode,
+      ...(audit === undefined ? {} : { audit })
     });
     this.name = "ProviderRequestError";
   }

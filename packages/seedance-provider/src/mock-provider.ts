@@ -21,7 +21,11 @@ const capabilities: ProviderCapabilities = {
   label: "Mock Video",
   testOnly: true,
   supportsCancellation: true,
-  acceptedAssetTypes: ["image"],
+  supportsReferenceImage: true,
+  maxReferenceImages: 8,
+  supportsReferenceVideo: true,
+  maxReferenceVideos: 1,
+  acceptedAssetTypes: ["image", "video"],
   models: [
     {
       id: modelId,

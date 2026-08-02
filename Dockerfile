@@ -1,5 +1,8 @@
 FROM node:22-bookworm-slim AS builder
 
+ARG DEBIAN_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian
+ARG DEBIAN_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security
+
 ENV COREPACK_HOME=/corepack
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
@@ -7,11 +10,27 @@ ENV API_INTERNAL_URL=http://api:43171
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl \
+RUN sed -i \
+      -e "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
+      -e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
+      /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg openssl \
   && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG AWS_SDK_REGISTRY=https://registry.npmjs.org
+ARG PRISMA_ENGINES_MIRROR=https://npmmirror.com/mirrors/prisma
+
+ENV PRISMA_ENGINES_MIRROR=${PRISMA_ENGINES_MIRROR}
+
+RUN corepack enable \
+  && corepack prepare pnpm@10.15.0 --activate \
+  && pnpm config set registry "${NPM_REGISTRY}" \
+  && pnpm config set '@aws-sdk:registry' "${AWS_SDK_REGISTRY}" \
+  && pnpm config set '@aws-crypto:registry' "${AWS_SDK_REGISTRY}" \
+  && pnpm config set '@smithy:registry' "${AWS_SDK_REGISTRY}" \
+  && pnpm config set '@aws:registry' "${AWS_SDK_REGISTRY}"
 
 COPY . .
 
@@ -20,12 +39,19 @@ RUN pnpm build
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG DEBIAN_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian
+ARG DEBIAN_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security
+
 ENV NODE_ENV=production
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl \
+RUN sed -i \
+      -e "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
+      -e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
+      /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg openssl \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder --chown=node:node /app /app

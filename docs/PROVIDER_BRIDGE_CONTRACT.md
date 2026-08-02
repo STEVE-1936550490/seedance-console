@@ -4,7 +4,7 @@
 
 本契约定义 TypeScript `SeedanceProviderAdapter` 与私有 Python AICC Bridge 之间的
 最小 HTTP 边界。TypeScript Client、Zod schema、Python 服务、固定 SDK 镜像和
-fake Bridge 测试均已实现；create、query 和 output stream 已由唯一真实 Demo 验证。
+fake Bridge 测试均已实现；create、query 和 output stream 已由真实 Demo 验证。
 
 Bridge 只能监听 Docker 私有网络，不发布公网端口。真实 API Key、AICC SDK 和 RSA
 私钥只存在于 Bridge；Web 与 API 不接触这些值。
@@ -95,11 +95,24 @@ Bridge 必须先按 `clientRequestId` 查询自己的持久化注册表。已有
 Worker 恢复提交状态时调用：
 
 ```http
-GET /v1/video/submissions/{clientRequestId}
+POST /v1/video/tasks/recover
 ```
 
 找到映射时返回 `{"id":"provider-task-id"}`，尚无映射时返回
 `{"id":null}`。该读取操作不得触发 Provider 创建。
+
+人工对账完成后可调用只修改 Bridge 本地注册表的内部接口：
+
+```http
+POST /v1/video/submissions/reconcile
+```
+
+`outcome=ACCEPTED` 必须同时提供已核实的 `providerTaskId`；
+`outcome=NOT_CREATED` 不得提供任务 ID。该接口不调用 Provider。
+
+创建错误响应可包含脱敏 `audit`：Bridge 请求 ID、请求起止时间、失败阶段、
+异常类型、request body 发送状态，以及 Provider request/trace ID。不得包含请求正文、
+预签名 URL、Authorization 或凭证。
 
 ## 5. 查询视频任务
 

@@ -2,7 +2,7 @@
 
 > 本文主体保留最初静态审计的证据和 `TODO_CONFIRM`，其中“未安装/未执行”描述的是
 > 当时的审计阶段。当前已选择并实现私有 Python AICC Bridge，固定 SDK 已安装在
-> Bridge 镜像中，唯一真实纯文生视频 Demo 已成功。当前事实状态见
+> Bridge 镜像中，真实纯文生视频和单参考图图生视频 Demo 均已成功。当前事实状态见
 > [真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md)。
 
 ## 1. 文档状态与证据
@@ -178,6 +178,11 @@ SDK 会原地加入/覆盖 `model` 字段，值为模型映射后的 endpoint。
 - 文本长度、语言、敏感内容及其他模型限制。
 
 真实 UI 与校验 schema 必须等第 11 节补齐后确定，不能从示例值扩展枚举或范围。
+
+Console 当前另有一个主动收窄的单参考视频 MVP：仅一段 MP4、2～15 秒，文件大小使用
+本地 `APP_VIDEO_MAX_BYTES` 安全上限。公开资料中的 MP4/MOV、最多三段及分辨率范围只作
+模型侧参考，不视为当前 AICC 租户合同。详见
+[单参考视频 MVP](REFERENCE_VIDEO_MVP.md)。
 
 ### 5.2 SDK 自动行为
 

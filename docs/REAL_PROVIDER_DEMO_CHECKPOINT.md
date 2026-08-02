@@ -1,11 +1,12 @@
 # 真实 Provider Demo 最终检查点
 
-记录时间：2026-07-31（Asia/Shanghai）
+记录时间：2026-07-31，2026-08-02 完成图生视频状态对账（Asia/Shanghai）
 
 ## 1. 最终结论
 
-首次有效的真实收费 Seedance Demo 已成功完成。修正 Provider Base URL 后，唯一一次
-到达已确认 `/api/v3` 创建端点的真实 create 成功返回 providerTaskId，随后完整通过：
+真实收费 Seedance Demo 已分别完成一次纯文生视频、一次单参考图图生视频和一次单参考
+视频的视频生视频。修正
+Provider Base URL 后，真实 create 成功返回 providerTaskId，随后完整通过：
 
 ```text
 create → provider accepted → versioned poll → SDK download/decrypt
@@ -15,7 +16,7 @@ create → provider accepted → versioned poll → SDK download/decrypt
 不得再次创建新的真实收费任务。任何后续真实 create 都需要新的用户明确授权；不得
 重新提交本文记录过的任何 `clientRequestId`。
 
-## 2. 唯一成功真实任务
+## 2. 首次成功的纯文真实任务
 
 - 本地 taskId：`cms9135ya0002s501mt1ua2jk`
 - clientRequestId：`real-demo-20260731-2222-73f6ac19`
@@ -51,17 +52,75 @@ create → provider accepted → versioned poll → SDK download/decrypt
 | 2026-07-31 14:21:57.039 | `SUCCEEDED / OUTPUT_PERSISTED`   |
 | 2026-07-31 14:21:59     | 播放端点复验 `200 / video/mp4`   |
 
+### 2.1 成功的单参考图真实任务
+
+该任务在此前获得的单次授权下完成；2026-08-02 的状态对账没有重新调用 Provider：
+
+- 本地 taskId：`cms9w5wu70006lj019o2gbni8`
+- clientRequestId：`eos-real-image-20260801-003`
+- providerTaskId：`cgt-20260801124854-j8sp2`
+- Provider / 模型：Seedance / `doubao-seedance-2.0`
+- 输入：单张 JPEG，93,243 字节，经私有 EOS 预签名 URL 发布
+- 参数：`duration=11`、`ratio=16:9`、`generate_audio=false`、`watermark=false`
+- Provider 状态：`running → succeeded`
+- 本地状态：`SUCCEEDED / OUTPUT_STORED`
+- 输出：`video/mp4`，7,309,809 字节
+- 数据库和本地文件 SHA-256：
+  `6ea9470b628cf49913b647f7431fa86594bef2f3719482ea25e7f16ddce1f7eb`
+- storageKey：`outputs/cms9w5wu70006lj019o2gbni8/video.mp4`
+- EOS 临时对象前缀：`seedance-inputs/3c567b17…`
+- EOS 清理：数据库 `deletedAt` 已记录、`cleanupError` 为空；验收时 `HeadObject`
+  返回 404
+- 泄漏检查：数据库、Redis、前端响应和容器日志均未命中预签名 URL 或凭证模式
+
+状态时间线：
+
+| 时间（UTC）             | 状态/事件                            |
+| ----------------------- | ------------------------------------ |
+| 2026-08-01 04:48:54.655 | `QUEUED / TASK_CREATED`              |
+| 2026-08-01 04:48:57.759 | `PROCESSING / PROVIDER_ACCEPTED`     |
+| 2026-08-01 04:55:56.816 | `PROCESSING / PROVIDER_OUTPUT_READY` |
+| 2026-08-01 04:55:58.012 | `SUCCEEDED / OUTPUT_STORED`          |
+
+### 2.2 成功的单参考视频真实任务
+
+- 本地 taskId：`cmsbwzh9w0000o90144jhj1q3`
+- clientRequestId：`aicc-v2v-20260802-single-002`
+- providerTaskId：`cgt-20260802225037-zzn8z`
+- Provider / 模型：Seedance / `doubao-seedance-2.0`
+- 输入：既有图生视频成功产出的 MP4，经私有 EOS 临时发布
+- 参数：`duration=11`、`ratio=16:9`、`generate_audio=false`、`watermark=false`
+- 本次有效真实 create 次数：**1**，没有自动重试或第二次 create
+- Provider 状态：`accepted → running → succeeded`
+- 本地最终状态：`SUCCEEDED / OUTPUT_STORED`
+- 输出：`video/mp4`，6,254,602 字节
+- SHA-256：
+  `9636a5981ee542180ce24e7783931baff607a87d5c23ca93ea4a8d9819c5bf38`
+- storageKey：`outputs/cmsbwzh9w0000o90144jhj1q3/video.mp4`
+- 播放和下载 API：HTTP 200，Content-Type、Content-Length 和 SHA-256 一致
+- EOS 临时对象：已删除，`HeadObject` 返回 404
+- 泄漏检查：数据库、Redis/队列、API、Web、容器日志及 Git 跟踪文件命中数均为 0
+
+同日较早的本地任务 `cmsbtqe7e0000o90145yn238v` 曾进入
+`PROVIDER_CREATE_OUTCOME_UNKNOWN`。远端任务列表在调用窗口内无匹配，用户人工确认该
+窗口无扣费且最近扣费仍为此前图生视频任务，因此保留原始事件并追加
+`USER_CONFIRMED_NO_BILLING`，最终按 `PROVIDER_TASK_NOT_CREATED` 完成人工对账；该任务
+没有被重试。
+
 ## 3. Create 次数口径
 
-本次有效真实 create 总次数为 **1**，即成功任务
-`cgt-20260731221858-8z7zj`。不得重复创建。
+纯文 Demo 的有效真实 create 次数为 **1**，即成功任务
+`cgt-20260731221858-8z7zj`。后续图生视频验收另有一次确认成功的 create，即
+`cgt-20260801124854-j8sp2`。单参考视频验收另有一次确认成功的 create，即
+`cgt-20260802225037-zzn8z`。三者均不得重复创建。
 
 在成功前曾有请求因部署配置中的 `AICC_BASE_URL` 缺少 `/api/v3` 而命中错误路径：
 
 - SDK 模型映射请求返回 HTTP 404；
 - 创建请求也返回 HTTP 404，且没有 providerTaskId；
 - 请求没有到达本文确认的 `/api/v3/contents/generations/tasks` 创建端点；
-- 系统没有自动重发，相关本地任务保持 `SUBMITTING / OUTCOME_UNKNOWN`。
+- 系统没有自动重发；迁移后相关本地任务进入
+  `RECONCILIATION_REQUIRED / OUTCOME_UNKNOWN`。
 
 这些错误路径 HTTP 请求只作为历史诊断记录，不计入有效真实 Provider create 次数，
 也不得被重新提交。根因修复结论是：
@@ -121,30 +180,54 @@ sink 并阻止 SDK 再次添加 sink；修复后 SDK 日志残留为 0 字节，
 
 ## 7. 已完成验证
 
-- Python Bridge tests：12/12，包含旧注册表原位升级。
-- TypeScript tests：12 个测试文件、88/88。
+- Python Bridge tests：22/22，包含旧注册表原位升级、审计时间保留与 SDK 视频 Header 审计。
+- TypeScript tests：18 个测试文件、161/161。
 - `pnpm lint`：通过。
 - `pnpm typecheck`：通过。
 - `pnpm build`：通过。
 - 客户端密钥扫描：通过。
-- Prisma validate、migrate status、migrate deploy：通过，5 个 migration 已应用。
+- Prisma validate、migrate status、migrate deploy：通过，10 个 migration 已应用；审计时间
+  列为 `TIMESTAMPTZ(3)`，UTC/+08:00 与 DST 偏移往返结果一致。
 - `docker compose config --quiet`：通过。
 - PostgreSQL、Redis、API、Worker、Provider Bridge：healthy。
-- 唯一真实任务 create、poll、download、本地持久化、Web 播放与下载：通过。
+- 纯文和单参考图真实任务的 create、poll、download、本地持久化、Web 播放与下载：通过。
 - Mock 模式恢复：通过。
 - 真实 create 关闭门：`403 / REAL_API_TEST_DISABLED`。
+
+## 7.1 视频生视频验收暴露缺陷及收口
+
+Bridge 成功响应审计时间为带明确 UTC 偏移的
+`2026-08-02T14:50:34.783+00:00`。旧 TypeScript schema 未允许偏移格式，导致在已经
+取得 providerTaskId 后抛出本地 `PROVIDER_PROTOCOL_ERROR`；提交异常分支误把该错误当作
+确认未创建并提前删除 EOS 对象。远端任务实际继续运行并最终成功，本地通过 Bridge
+submission registry 找回 providerTaskId 后恢复 poll 和下载。
+
+修复后：
+
+- Bridge 审计时间以 ISO 8601 UTC `Z` 输出；接口同时接受 `Z` 或明确偏移并立即规范化为
+  UTC `Z`，拒绝无时区或模糊格式；
+- ProviderSubmission 审计时间迁移为 PostgreSQL `TIMESTAMPTZ(3)`；展示层才转换本地时区；
+- 成功响应解析失败按 outcome unknown 处理并只读恢复，不再当作确认未创建；
+- `providerAssetCleanupReadyAt` 是 EOS 删除的持久化门禁；只有确认未创建、远端明确失败/
+  取消/过期，或成功输出完成下载、持久化及校验后才能设置；
+- 本地 poll 超时转入 `RECONCILIATION_REQUIRED`，不会触发 EOS 清理；
+- DeleteObject 和数据库 deletedAt 更新保持幂等，清理失败只记录清理错误，不覆盖任务终态。
 
 ## 8. 当前限制与后续 TODO
 
 - 不再执行真实收费 create；如未来确需执行，必须获得新的明确授权。
-- 真实 Demo 只验收了纯文生视频；真实参考图片、视频和音频素材组合尚未验收。
+- 真实 Demo 已验收纯文生视频、单张 JPEG 图生视频和单段 MP4 视频生视频；图片/视频的
+  fixture E2E、私有 EOS 上传/GET/删除和真实 Provider 拉取均已完成验收。图片和视频的正式
+  租户限制与最短 TTL 仍待确认。见 [Provider 素材安全发布](ASSET_PUBLISHING.md) 和
+  [单参考视频 MVP](REFERENCE_VIDEO_MVP.md)。
 - Provider 远端取消语义仍未确认，当前明确报告不支持。
 - Provider 未返回用量、Token 或费用字段，继续保持空用量，不做推测。
 - Provider 正式错误码、限流规则、输出 URL TTL 和远端幂等能力仍待官方确认。
 - Direct TypeScript transport 仍禁用；AICC 真实路径继续使用私有 Python Bridge。
 - 对象存储/MinIO/S3、复杂 RBAC、多租户、支付不属于当前 MVP。
 
-## 9. 工作区状态
+## 9. 证据保留
 
-本轮代码和文档尚未 commit 或 push。继续工作时必须保留已有改动，先执行
-`git status`，不得把成功任务或历史 outcome-unknown 任务重置后重新提交。
+继续工作时不得删除成功任务、输入素材、生成视频或历史 outcome-unknown 任务，也不得
+重新提交已记录的 `clientRequestId`。数据库与 Docker Storage volume 是运行证据，不应
+作为 Git 制品提交。

@@ -20,7 +20,15 @@ import type {
   VideoGenerationJob
 } from "@seedance/shared";
 import { providerJobId } from "@seedance/shared";
-import type { Storage } from "@seedance/storage";
+import {
+  AssetPublishingError as StorageAssetPublishingError,
+  inspectMp4Video,
+  isSupportedProviderImageMimeType,
+  isSupportedProviderVideoMimeType,
+  type AssetPublisher,
+  type Storage,
+  type VideoMetadata
+} from "@seedance/storage";
 
 const createTaskSchema = z.object({
   clientRequestId: z.string().min(8).max(128),
@@ -31,6 +39,17 @@ const createTaskSchema = z.object({
 });
 
 const taskParamsSchema = z.object({ taskId: z.string().min(1) });
+const providerAssetParamsSchema = z
+  .object({ assetId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) })
+  .strict();
+const providerAssetQuerySchema = z
+  .object({
+    provider: z.literal("seedance"),
+    purpose: z.enum(["reference-image", "reference-video"]),
+    expires: z.string().regex(/^\d{1,16}$/),
+    signature: z.string().min(1).max(128)
+  })
+  .strict();
 
 export interface MvpRouteDependencies {
   prisma: PrismaClient;
@@ -38,6 +57,10 @@ export interface MvpRouteDependencies {
   taskQueue: Queue<VideoGenerationJob>;
   storage: Storage;
   uploadMaxBytes: number;
+  appVideoMaxBytes?: number;
+  ffprobePath?: string;
+  assetPublisher?: AssetPublisher;
+  assetPublishingConfigured?: boolean;
 }
 
 export async function registerMvpRoutes(
@@ -47,7 +70,10 @@ export async function registerMvpRoutes(
   await server.register(multipart, {
     limits: {
       files: 1,
-      fileSize: dependencies.uploadMaxBytes
+      fileSize: Math.max(
+        dependencies.uploadMaxBytes,
+        dependencies.appVideoMaxBytes ?? dependencies.uploadMaxBytes
+      )
     }
   });
 
@@ -60,10 +86,13 @@ export async function registerMvpRoutes(
   server.post("/api/assets", async (request, reply) => {
     const file = await request.file();
     if (file === undefined) {
-      return reply.code(400).send({ error: "IMAGE_REQUIRED" });
+      return reply.code(400).send({ error: "ASSET_REQUIRED" });
+    }
+    if (file.mimetype === "video/mp4") {
+      return uploadVideoAsset(file, reply, dependencies);
     }
     if (!allowedImageTypes.has(file.mimetype)) {
-      return reply.code(415).send({ error: "UNSUPPORTED_IMAGE_TYPE" });
+      return reply.code(415).send({ error: "UNSUPPORTED_ASSET_TYPE" });
     }
 
     const content = await file.toBuffer();
@@ -91,12 +120,61 @@ export async function registerMvpRoutes(
         id: asset.id,
         originalName: asset.originalName,
         mimeType: asset.mimeType,
-        sizeBytes: Number(asset.sizeBytes)
+        sizeBytes: Number(asset.sizeBytes),
+        kind: "image",
+        durationSeconds: null,
+        width: null,
+        height: null,
+        codec: null,
+        frameRate: null,
+        hasAudio: null
       });
     } catch (error) {
       await dependencies.storage.delete(storageKey).catch(() => undefined);
       throw error;
     }
+  });
+
+  server.route({
+    method: ["GET", "HEAD"],
+    url: "/api/provider-assets/:assetId",
+    logLevel: "silent",
+    handler: async (request, reply) => {
+      if (dependencies.assetPublisher === undefined) {
+        return reply
+          .code(503)
+          .send({ error: "ASSET_PUBLISHING_NOT_CONFIGURED" });
+      }
+      const params = providerAssetParamsSchema.safeParse(request.params);
+      const query = providerAssetQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        return reply.code(403).send({ error: "ASSET_SIGNATURE_INVALID" });
+      }
+      try {
+        const asset = await dependencies.assetPublisher.authorizeProviderAsset({
+          assetId: params.data.assetId,
+          ...query.data
+        });
+        reply.header("Content-Type", asset.mimeType);
+        reply.header("Content-Length", String(asset.sizeBytes));
+        reply.header("ETag", `"${asset.checksum}"`);
+        reply.header("Cache-Control", "private, no-store");
+        reply.header("Accept-Ranges", "none");
+        if (request.method === "HEAD") return reply.send();
+        return reply.send(
+          dependencies.storage.openReadStream(asset.storageKey)
+        );
+      } catch (error) {
+        return sendAssetPublishingError(reply, error);
+      }
+    }
+  });
+  server.route({
+    method: ["DELETE", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"],
+    url: "/api/provider-assets/:assetId",
+    logLevel: "silent",
+    handler: async (_request, reply) =>
+      reply.code(405).send({ error: "METHOD_NOT_ALLOWED" })
   });
 
   server.post("/api/tasks", async (request, reply) => {
@@ -119,6 +197,21 @@ export async function registerMvpRoutes(
       });
     }
 
+    const capabilities = await dependencies.provider.getCapabilities();
+    if (
+      dependencies.provider.name === "seedance" &&
+      parsed.data.assetIds.length > 0 &&
+      !(
+        dependencies.assetPublishingConfigured ??
+        dependencies.assetPublisher !== undefined
+      )
+    ) {
+      return reply.code(400).send({
+        error: "ASSET_PUBLISHING_NOT_CONFIGURED",
+        message: "Reference asset publishing is not configured."
+      });
+    }
+
     const existing = await dependencies.prisma.videoTask.findUnique({
       where: { clientRequestId: parsed.data.clientRequestId }
     });
@@ -131,11 +224,57 @@ export async function registerMvpRoutes(
           : await dependencies.prisma.asset.findMany({
               where: {
                 id: { in: parsed.data.assetIds },
-                kind: AssetKind.INPUT_IMAGE
+                kind: { in: [AssetKind.INPUT_IMAGE, AssetKind.INPUT_VIDEO] }
               }
             });
       if (assets.length !== new Set(parsed.data.assetIds).size) {
         return reply.code(400).send({ error: "INVALID_REFERENCE_ASSET" });
+      }
+      const images = assets.filter(
+        (asset) => asset.kind === AssetKind.INPUT_IMAGE
+      );
+      const videos = assets.filter(
+        (asset) => asset.kind === AssetKind.INPUT_VIDEO
+      );
+      if (!capabilities.supportsReferenceImage && images.length > 0) {
+        return reply.code(400).send({ error: "REFERENCE_IMAGES_UNSUPPORTED" });
+      }
+      if (images.length > capabilities.maxReferenceImages) {
+        return reply.code(400).send({ error: "TOO_MANY_REFERENCE_IMAGES" });
+      }
+      if (!capabilities.supportsReferenceVideo && videos.length > 0) {
+        return reply.code(400).send({ error: "REFERENCE_VIDEOS_UNSUPPORTED" });
+      }
+      if (videos.length > capabilities.maxReferenceVideos) {
+        return reply.code(400).send({ error: "TOO_MANY_REFERENCE_VIDEOS" });
+      }
+      if (
+        dependencies.provider.name === "seedance" &&
+        images.length + videos.length > 1
+      ) {
+        return reply.code(400).send({ error: "TOO_MANY_REFERENCE_ASSETS" });
+      }
+      if (
+        dependencies.provider.name === "seedance" &&
+        images.some(
+          (asset) => !isSupportedProviderImageMimeType(asset.mimeType)
+        )
+      ) {
+        return reply.code(400).send({
+          error: "UNSUPPORTED_REFERENCE_IMAGE_TYPE",
+          message: "Seedance reference images must be PNG or JPEG."
+        });
+      }
+      if (
+        dependencies.provider.name === "seedance" &&
+        videos.some(
+          (asset) => !isSupportedProviderVideoMimeType(asset.mimeType)
+        )
+      ) {
+        return reply.code(400).send({
+          error: "UNSUPPORTED_REFERENCE_VIDEO_TYPE",
+          message: "Seedance MVP reference videos must be MP4."
+        });
       }
 
       const task = await dependencies.prisma.videoTask.create({
@@ -155,7 +294,10 @@ export async function registerMvpRoutes(
           assets: {
             create: assets.map((asset, position) => ({
               assetId: asset.id,
-              role: AssetRole.REFERENCE_IMAGE,
+              role:
+                asset.kind === AssetKind.INPUT_VIDEO
+                  ? AssetRole.REFERENCE_VIDEO
+                  : AssetRole.REFERENCE_IMAGE,
               position
             }))
           }
@@ -170,7 +312,7 @@ export async function registerMvpRoutes(
     };
     await dependencies.taskQueue.add(submitJob.kind, submitJob, {
       jobId: providerJobId(submitJob),
-      attempts: 2,
+      attempts: 1,
       backoff: { type: "fixed", delay: 1_000 },
       removeOnComplete: true,
       removeOnFail: 100
@@ -257,6 +399,109 @@ export async function registerMvpRoutes(
   );
 }
 
+async function uploadVideoAsset(
+  file: {
+    filename: string;
+    mimetype: string;
+    file: Readable;
+  },
+  reply: FastifyReply,
+  dependencies: MvpRouteDependencies
+) {
+  if (extname(file.filename).toLowerCase() !== ".mp4") {
+    file.file.resume();
+    return reply.code(415).send({ error: "VIDEO_EXTENSION_MISMATCH" });
+  }
+  const storageKey = `inputs/videos/${randomUUID()}.mp4`;
+  let metadata: VideoMetadata | undefined;
+  try {
+    const stored = await dependencies.storage.putAtomic(storageKey, file.file, {
+      maxBytes: dependencies.appVideoMaxBytes ?? dependencies.uploadMaxBytes,
+      timeoutMs: 30_000,
+      validate: async (candidate) => {
+        metadata = await inspectMp4Video(candidate, {
+          minDurationSeconds: 2,
+          maxDurationSeconds: 15,
+          ...(dependencies.ffprobePath === undefined
+            ? {}
+            : { ffprobePath: dependencies.ffprobePath })
+        });
+      }
+    });
+    if (metadata === undefined) {
+      throw new Error("Video metadata was not produced.");
+    }
+    const originalName = sanitizeFileName(file.filename);
+    try {
+      const asset = await dependencies.prisma.asset.create({
+        data: {
+          kind: AssetKind.INPUT_VIDEO,
+          storageKey,
+          originalName,
+          mimeType: "video/mp4",
+          sizeBytes: stored.sizeBytes,
+          checksum: stored.sha256,
+          durationMs: Math.round(metadata.durationSeconds * 1_000),
+          width: metadata.width,
+          height: metadata.height,
+          codec: metadata.codec,
+          pixelFormat: metadata.pixelFormat,
+          frameRate: metadata.frameRate,
+          hasAudio: metadata.hasAudio
+        }
+      });
+      return reply.code(201).send({
+        id: asset.id,
+        originalName: asset.originalName,
+        mimeType: asset.mimeType,
+        sizeBytes: Number(asset.sizeBytes),
+        kind: "video",
+        durationSeconds: metadata.durationSeconds,
+        width: metadata.width,
+        height: metadata.height,
+        codec: metadata.codec,
+        frameRate: metadata.frameRate,
+        hasAudio: metadata.hasAudio
+      });
+    } catch (error) {
+      await dependencies.storage.delete(storageKey).catch(() => undefined);
+      throw error;
+    }
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "VIDEO_FILE_INVALID" ||
+        error.code === "STORAGE_SIZE_LIMIT_EXCEEDED")
+    ) {
+      return reply.code(422).send({ error: String(error.code) });
+    }
+    throw error;
+  }
+}
+
+function sendAssetPublishingError(reply: FastifyReply, error: unknown) {
+  if (!(error instanceof StorageAssetPublishingError)) throw error;
+  switch (error.code) {
+    case "ASSET_SIGNATURE_INVALID":
+    case "ASSET_URL_EXPIRED":
+    case "ASSET_PUBLISHING_INVALID_REQUEST":
+      return reply.code(403).send({ error: error.code });
+    case "ASSET_NOT_FOUND":
+    case "ASSET_FILE_MISSING":
+      return reply.code(404).send({ error: error.code });
+    case "ASSET_TYPE_UNSUPPORTED":
+    case "ASSET_EMPTY":
+    case "ASSET_TOO_LARGE":
+    case "ASSET_METADATA_MISMATCH":
+    case "ASSET_FILE_INVALID":
+      return reply.code(422).send({ error: error.code });
+    default:
+      return reply.code(503).send({ error: error.code });
+  }
+}
+
 const taskInclude = {
   assets: {
     include: { asset: true },
@@ -284,11 +529,29 @@ async function findTask(
 
 function toTaskDto(task: TaskWithRelations): TaskDto {
   const referenceAssets = task.assets
-    .filter((relation) => relation.role === AssetRole.REFERENCE_IMAGE)
+    .filter(
+      (relation) =>
+        relation.role === AssetRole.REFERENCE_IMAGE ||
+        relation.role === AssetRole.REFERENCE_VIDEO
+    )
     .map((relation) => ({
       id: relation.asset.id,
       originalName: relation.asset.originalName,
-      mimeType: relation.asset.mimeType
+      mimeType: relation.asset.mimeType,
+      kind:
+        relation.role === AssetRole.REFERENCE_VIDEO
+          ? ("video" as const)
+          : ("image" as const),
+      sizeBytes: Number(relation.asset.sizeBytes),
+      durationSeconds:
+        relation.asset.durationMs === null
+          ? null
+          : relation.asset.durationMs / 1_000,
+      width: relation.asset.width,
+      height: relation.asset.height,
+      codec: relation.asset.codec,
+      frameRate: relation.asset.frameRate,
+      hasAudio: relation.asset.hasAudio
     }));
 
   return {

@@ -16,7 +16,12 @@ import {
   type ProviderDownload,
   type SeedanceProvider
 } from "@seedance/seedance-provider";
-import { LocalStorage, type Storage } from "@seedance/storage";
+import {
+  LocalStorage,
+  type AssetPublisher,
+  type PublishedRemoteObject,
+  type Storage
+} from "@seedance/storage";
 
 import {
   createDownloadProcessor,
@@ -74,6 +79,24 @@ describe("safe provider download processing", () => {
     expect(
       (await harness.storage.stat("outputs/task-1/video.mp4")).sizeBytes
     ).toBe(fixture.length);
+  });
+
+  it("cleans a temporary reference object after the task succeeds", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async () => {
+        throw new Error("not used");
+      },
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async (remoteObject) => {
+        deleted.push(remoteObject);
+      }
+    };
+    const harness = await createHarness({ assetPublisher });
+    await harness.run();
+    expect(deleted).toEqual(harness.store.publishedAssetsSnapshot);
   });
 
   it("ignores duplicate, stale, and terminal download jobs", async () => {
@@ -345,6 +368,7 @@ async function createHarness(
   options: {
     downloads?: Array<ProviderDownload | Error | Promise<ProviderDownload>>;
     policy?: DownloadPolicy;
+    assetPublisher?: AssetPublisher;
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), "seedance-download-"));
@@ -361,7 +385,10 @@ async function createHarness(
     scheduler,
     policy: options.policy ?? policy,
     now: () => new Date(currentTime),
-    random: () => 0.5
+    random: () => 0.5,
+    ...(options.assetPublisher === undefined
+      ? {}
+      : { assetPublisher: options.assetPublisher })
   };
   const process = createDownloadProcessor(dependencies);
   return {
@@ -382,6 +409,14 @@ async function createHarness(
 }
 
 class MemoryDownloadStore implements DownloadTaskStore {
+  private readonly publishedAssets: PublishedRemoteObject[] = [
+    {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: "seedance-inputs/redacted-object"
+    }
+  ];
+  readonly publishedAssetsSnapshot = [...this.publishedAssets];
   status = TaskStatus.PROCESSING;
   downloadPending = true;
   downloadVersion = 1;
@@ -393,8 +428,24 @@ class MemoryDownloadStore implements DownloadTaskStore {
   output: StoredVideoOutput | null = null;
   lastError: string | null = null;
   failPersistOnce = false;
+  cleanupReady = false;
   persistCalls = 0;
   invalidateCalls = 0;
+
+  async findPublishedAssets(): Promise<readonly PublishedRemoteObject[]> {
+    return this.cleanupReady ? [...this.publishedAssets] : [];
+  }
+
+  async markPublishedAssetDeleted(
+    remoteObject: PublishedRemoteObject
+  ): Promise<void> {
+    const index = this.publishedAssets.findIndex(
+      (value) => value.objectKey === remoteObject.objectKey
+    );
+    if (index >= 0) this.publishedAssets.splice(index, 1);
+  }
+
+  async markPublishedAssetCleanupFailed(): Promise<void> {}
 
   async claimDownload(
     taskId: string,
@@ -438,6 +489,7 @@ class MemoryDownloadStore implements DownloadTaskStore {
     this.downloadPending = false;
     this.nextDownloadAt = null;
     this.leaseUntil = null;
+    this.cleanupReady = true;
     return true;
   }
 

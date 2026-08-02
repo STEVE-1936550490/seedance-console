@@ -41,8 +41,9 @@ docker compose config --quiet
    - Console 短期签名 HTTPS 素材端点。
 5. 明确 Provider 真实运行配置只从部署环境注入，不进入仓库。
 
-固定 SDK 制品、日志关闭方案和纯文生视频真实链路已经验收。真实参考素材的 Provider
-可达 URL 策略仍属于后续范围，因此当前只声明纯文生视频真实路径已完成。
+固定 SDK 制品、日志关闭方案和纯文生视频真实链路已经验收。Console 短期签名素材
+端点、私有 EOS 预签名发布、fixture E2E、EOS 连通性以及一次真实 Provider 单参考图
+链路也已完成验收。
 
 ## 3. 阶段 1：配置和类型扩展（已完成）
 
@@ -142,7 +143,7 @@ docker compose config --quiet
 - 两个并发 submit job 只有一个调用 Provider。
 - 数据库暂时失败后，Worker 使用已经获得的 ID 重试写库，不再次 create。
 - Worker 重启后可以从 fake Bridge 注册表恢复 ID。
-- 注册表也无映射时保持 `SUBMITTING/OUTCOME_UNKNOWN`，不产生第二个收费任务。
+- 注册表也无映射时进入 `RECONCILIATION_REQUIRED/OUTCOME_UNKNOWN`，不产生第二个收费任务。
 
 ## 7. 阶段 5：可恢复轮询（已完成）
 
@@ -172,7 +173,7 @@ docker compose config --quiet
 ## 8. 阶段 6：视频下载和本地持久化（已完成）
 
 实现说明见 [Provider 输出下载与恢复](DOWNLOAD_SAFETY.md)。Worker/Storage 闭环已
-通过 Mock fixture 自动化测试，并由唯一真实 Demo 验证 Python Bridge、SDK
+通过 Mock fixture 自动化测试，并由真实 Demo 验证 Python Bridge、SDK
 下载/解密、MP4 校验、原子落盘及 Web 播放下载。
 
 ### 范围
@@ -325,6 +326,12 @@ REAL_API_TEST=true
 9 Docker 集成 ✓
   ↓ 用户明确授权
 10 真实最小联调 ✓
+  ↓ 独立增量（无真实调用）
+11 参考图片发布代码、fixture 与 EOS 连通性 ✓
+  ↓ 用户此前明确授权
+12 单参考图真实 create → poll → download → cleanup ✓
+  ↓ 门禁恢复关闭
+后续真实任务：仍需协议确认和新授权
 ```
 
 阶段 7 已完成“不支持”的安全实现。阶段 10 的一次性真实验收不反向成为自动化
@@ -342,5 +349,33 @@ P3 完成需同时满足：
 - Provider URL 过期前输出已保存到本地 Storage。
 - fixture 测试不调用收费接口。
 - lint、typecheck、test、build 和 Compose config 全部通过。
-- 唯一真实视频生成已成功完成并保存本地；日常运行已恢复 Mock。
+- 纯文和单参考图真实视频生成已成功完成并保存本地；日常运行已恢复 Mock。
 - `REAL_API_TEST=false`，关闭门返回 403，未经新授权不得执行后续真实 create。
+
+## 15. 阶段 11：安全参考图片发布（代码、fixture 与 EOS 连通性已完成）
+
+本阶段是阶段 10 之后的独立增量；其后在此前单次授权下完成了阶段 12 的真实单参考图
+验收。本轮状态对账不授权新的收费调用。实现与安全边界详见
+[Provider 参考图片安全发布](ASSET_PUBLISHING.md)。
+
+已完成：
+
+- `AssetPublisher` 与仅存在于 Worker 内存的 `PublishedProviderAsset`；
+- HMAC-SHA256 短期签名 GET/HEAD 素材端点；
+- Asset、Storage、MIME、大小、SHA-256、过期时间和路径安全校验；
+- Seedance 单张 PNG/JPEG `reference_image` 映射；
+- capabilities 与现有上传 UI 的单图兼容；
+- fixture Bridge 素材读取及 submit → poll → download → 持久化 → Web
+  预览/下载 E2E；
+- 签名篡改、过期、元数据不一致、配置缺失和日志泄漏测试；
+- 私有 EOS fixture 上传、预签名 GET 内容校验、删除及删除后 404 验收；
+- 真实 Provider 单参考图 create、轮询、下载、本地持久化与 EOS 终态清理；
+- Mock 与 Seedance 纯文回归保持独立可用。
+
+尚未完成：
+
+- S3/MinIO 的其他实现（当前私有 EOS 已满足发布器需求）；
+- 服务商对图片限制和签名 URL 最短 TTL 的正式确认；
+- 参考视频、音频、多图及其他未确认素材组合。
+
+一次单参考图成功不得表述为所有图生视频参数或素材组合均受支持。

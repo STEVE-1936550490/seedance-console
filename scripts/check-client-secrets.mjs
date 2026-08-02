@@ -14,7 +14,19 @@ const forbiddenNames = [
   "SEEDANCE_BASE_URL",
   "SEEDANCE_BRIDGE_TOKEN",
   "SEEDANCE_BRIDGE_URL",
+  "SEEDANCE_ASSET_SIGNING_KEY",
+  "SEEDANCE_ASSET_PUBLIC_BASE_URL",
+  "SEEDANCE_ASSET_URL_TTL_MS",
+  "SEEDANCE_ASSET_MAX_BYTES",
+  "EOS_ENDPOINT",
+  "EOS_REGION",
+  "EOS_BUCKET",
+  "EOS_ACCESS_KEY_ID",
+  "EOS_SECRET_ACCESS_KEY",
+  "AICC_API_KEY",
+  "AICC_BASE_URL",
   "MAAS_API_KEY",
+  "MAAS_BASE_URL",
   "MAAS_PRIVATE_KEY_PATH"
 ];
 const forbiddenDeploymentNames = [
@@ -26,8 +38,18 @@ const forbiddenDeploymentNames = [
 const configuredSecrets = [
   process.env.SEEDANCE_API_KEY?.trim(),
   process.env.SEEDANCE_BRIDGE_TOKEN?.trim(),
+  process.env.SEEDANCE_ASSET_SIGNING_KEY?.trim(),
+  process.env.EOS_ACCESS_KEY_ID?.trim(),
+  process.env.EOS_SECRET_ACCESS_KEY?.trim(),
+  process.env.AICC_API_KEY?.trim(),
   process.env.MAAS_API_KEY?.trim()
 ].filter((value) => value !== undefined && value.length >= 8);
+const forbiddenUrlFragments = [
+  "X-Amz-Credential=",
+  "X-Amz-Signature=",
+  "X-Tos-Signature=",
+  "X-Tos-Credential="
+];
 const roots = [
   resolve(repositoryRoot, "apps/web/src"),
   resolve(repositoryRoot, "apps/web/.next")
@@ -46,6 +68,11 @@ for (const root of roots) {
     for (const configuredSecret of configuredSecrets) {
       if (content.includes(configuredSecret)) {
         throw new Error("Client output contains a configured server secret.");
+      }
+    }
+    for (const fragment of forbiddenUrlFragments) {
+      if (content.includes(fragment)) {
+        throw new Error("Client output contains a presigned URL fragment.");
       }
     }
   }

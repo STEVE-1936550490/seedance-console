@@ -1,14 +1,14 @@
 import type { Readable } from "node:stream";
+import type { ProviderCreateAudit } from "./errors.js";
 
 export type ProviderName = "mock" | "seedance";
 
 export type ProviderTaskStatus =
   "PROCESSING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "EXPIRED";
 
-export type ProviderAssetType = "image" | "video" | "audio";
+export type ProviderAssetType = "image" | "video";
 
-export type ProviderAssetRole =
-  "REFERENCE_IMAGE" | "REFERENCE_VIDEO" | "REFERENCE_AUDIO";
+export type ProviderAssetRole = "REFERENCE_IMAGE" | "REFERENCE_VIDEO";
 
 export type MockScenario = "success" | "failure" | "slow";
 
@@ -48,6 +48,10 @@ export interface ProviderCapabilities {
   label: string;
   testOnly: boolean;
   supportsCancellation: boolean;
+  supportsReferenceImage: boolean;
+  maxReferenceImages: number;
+  supportsReferenceVideo: boolean;
+  maxReferenceVideos: number;
   acceptedAssetTypes: readonly ProviderAssetType[];
   models: readonly ProviderModel[];
 }
@@ -63,7 +67,7 @@ export type MockParameters = {
 export type SeedanceParameters = {
   ratio: "16:9";
   duration: 11;
-  generateAudio: true;
+  generateAudio: boolean;
   watermark: false;
 };
 
@@ -73,13 +77,25 @@ export interface PublishedProviderAsset {
   position: number;
   mimeType: string;
   sizeBytes: number;
-  checksum?: string;
+  checksum: string;
   url: string;
-  expiresAt?: Date;
+  expiresAt: Date;
+  metadata?: {
+    durationSeconds: number;
+    width: number;
+    height: number;
+    codec: string;
+    pixelFormat: string | null;
+    frameRate: string;
+    hasAudio: boolean;
+    container: "mp4";
+  };
 }
 
 export interface CreateTaskInput {
   clientRequestId: string;
+  createAttemptId?: string;
+  requestPayloadSha256?: string;
   model: string;
   prompt: string;
   referenceAssetIds: readonly string[];
@@ -112,6 +128,7 @@ export interface ProviderTaskSnapshot {
   outputs: readonly ProviderOutput[];
   usage: readonly ProviderUsage[];
   error?: ProviderError;
+  createAudit?: ProviderCreateAudit;
   debug?: {
     providerStatus?: string;
     providerRequestId?: string;

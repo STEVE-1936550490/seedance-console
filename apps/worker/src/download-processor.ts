@@ -11,6 +11,7 @@ import {
 import {
   StorageLimitError,
   StorageTimeoutError,
+  type AssetPublisher,
   type Storage,
   type StorageCandidate
 } from "@seedance/storage";
@@ -22,6 +23,7 @@ import type {
   TaskStore,
   VideoOutputMetadata
 } from "./task-store.js";
+import { cleanupPublishedAssets } from "./task-processor.js";
 
 const outputMimeType = "video/mp4";
 
@@ -40,6 +42,8 @@ export interface DownloadProcessorDependencies {
   storage: Storage;
   scheduler: ProviderJobScheduler;
   policy: DownloadPolicy;
+  assetPublisher?: AssetPublisher;
+  deletePublishedAssetsOnTerminal?: boolean;
   now?: () => Date;
   random?: () => number;
 }
@@ -52,6 +56,9 @@ export type DownloadTaskStore = Pick<
   | "invalidateVideoOutput"
   | "scheduleDownloadRetry"
   | "stopDownload"
+  | "findPublishedAssets"
+  | "markPublishedAssetDeleted"
+  | "markPublishedAssetCleanupFailed"
 >;
 
 export function createDownloadProcessor(
@@ -85,11 +92,14 @@ export function createDownloadProcessor(
 
     try {
       const output = await recoverOrDownload(dependencies, claim);
-      await dependencies.store.persistVideoOutputAndComplete(
+      const completed = await dependencies.store.persistVideoOutputAndComplete(
         claim,
         output,
         now()
       );
+      if (completed) {
+        await cleanupPublishedAssets(dependencies, taskId);
+      }
     } catch (error) {
       await handleDownloadError(dependencies, claim, error, now(), random);
     }

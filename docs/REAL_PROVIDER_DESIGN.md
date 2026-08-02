@@ -1,6 +1,6 @@
 # 真实 Seedance Provider 接入设计
 
-> 本文保留 P2 时的设计背景。对应实现已经完成，并由一次真实纯文生视频 Demo 验证；
+> 本文保留 P2 时的设计背景。对应实现已经完成，并由真实纯文和单参考图 Demo 验证；
 > 当前事实状态以
 > [真实 Provider Demo 最终检查点](REAL_PROVIDER_DEMO_CHECKPOINT.md) 和
 > [分阶段实施记录](REAL_PROVIDER_IMPLEMENTATION_PLAN.md) 为准。
@@ -16,7 +16,7 @@
 `TODO_CONFIRM` 项不在本文中补猜。未确认的用量、Webhook、远端取消、完整参数范围等非核心能力不阻塞创建、查询、状态映射、视频下载和本地持久化的设计；会改变安全 transport、素材可达性或防重复提交保证的缺口则明确列为 P3 阻断条件。
 
 “本阶段不修改代码、不配置真实 Key、不调用真实接口”是 P2 当时的设计边界；后续
-P3/P4 已按双重门完成实现和唯一真实 Demo。
+P3/P4 已按双重门完成实现以及纯文和单参考图真实 Demo。
 
 ## 2. 设计结论
 
@@ -188,18 +188,18 @@ interface ProviderErrorDetails {
 
 目标错误类型：
 
-| 类型                                | 含义                                  | 默认处理                                         |
-| ----------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| `ProviderValidationError`           | 内部输入或 Provider 参数无效          | 不重试；创建前返回稳定字段错误                   |
-| `ProviderAuthenticationError`       | Key、权限或认证失败                   | 不重试；告警，任务失败或保持待人工处理           |
-| `ProviderRateLimitError`            | 429 或已确认限流结果                  | 查询可按 `retryAfterMs` 退避；创建不得盲目重发   |
-| `ProviderTransientError`            | 网络或明确可重试服务端错误            | 查询/下载可重试；创建进入结果未知边界            |
-| `ProviderOutcomeUnknownError`       | 创建/取消请求是否被服务商接受无法确认 | 保持 `SUBMITTING` 或原处理状态，禁止自动再次创建 |
-| `ProviderProtocolError`             | 响应缺字段、未知状态或 schema 不匹配  | 不改变业务终态；记录脱敏事件并受控重查/告警      |
-| `ProviderTaskNotFoundError`         | 远端任务不存在                        | 当前语义 `TODO_CONFIRM`；不得直接猜成 `EXPIRED`  |
-| `ProviderUnsupportedOperationError` | 例如真实 Provider 取消未确认          | API 返回明确“不支持”，不伪造取消成功             |
-| `ProviderOutputExpiredError`        | 输出地址不可再用                      | 重新查询一次以获取新地址；仍失败则人工处理       |
-| `ProviderDownloadValidationError`   | 状态码、类型、大小或文件签名不合法    | 删除临时文件，不进入 `SUCCEEDED`                 |
+| 类型                                | 含义                                 | 默认处理                                         |
+| ----------------------------------- | ------------------------------------ | ------------------------------------------------ |
+| `ProviderValidationError`           | 内部输入或 Provider 参数无效         | 不重试；创建前返回稳定字段错误                   |
+| `ProviderAuthenticationError`       | Key、权限或认证失败                  | 不重试；告警，任务失败或保持待人工处理           |
+| `ProviderRateLimitError`            | 429 或已确认限流结果                 | 查询可按 `retryAfterMs` 退避；创建不得盲目重发   |
+| `ProviderTransientError`            | 网络或明确可重试服务端错误           | 查询/下载可重试；创建进入结果未知边界            |
+| `ProviderOutcomeUnknownError`       | 创建请求是否被服务商接受无法确认     | 进入 `RECONCILIATION_REQUIRED`，禁止自动再次创建 |
+| `ProviderProtocolError`             | 响应缺字段、未知状态或 schema 不匹配 | 不改变业务终态；记录脱敏事件并受控重查/告警      |
+| `ProviderTaskNotFoundError`         | 远端任务不存在                       | 当前语义 `TODO_CONFIRM`；不得直接猜成 `EXPIRED`  |
+| `ProviderUnsupportedOperationError` | 例如真实 Provider 取消未确认         | API 返回明确“不支持”，不伪造取消成功             |
+| `ProviderOutputExpiredError`        | 输出地址不可再用                     | 重新查询一次以获取新地址；仍失败则人工处理       |
+| `ProviderDownloadValidationError`   | 状态码、类型、大小或文件签名不合法   | 删除临时文件，不进入 `SUCCEEDED`                 |
 
 原始 HTTP 状态和 Provider 错误可用于 Adapter 内分类，但业务层只接收稳定内部错误。当前未确认的错误码不得建立猜测映射。
 
@@ -244,7 +244,8 @@ Job 只携带内部 `taskId` 和调度版本，不携带提示词、素材、API
 Worker 看到以下情况时：
 
 - `QUEUED` 且 `providerTaskId=null`：允许竞争提交权。
-- `SUBMITTING` 且 `providerTaskId=null`：不得再次调用创建；先走结果未知恢复。
+- `SUBMITTING` 且 `providerTaskId=null`：仅表示 create 调用前的短暂过渡态。
+- `RECONCILIATION_REQUIRED` 且 `providerTaskId=null`：不得再次调用创建；只允许只读对账或人工恢复。
 - `PROCESSING` 且 `providerTaskId!=null`：只轮询，绝不调用创建。
 - 任意终态：无操作成功。
 
@@ -260,7 +261,20 @@ Worker 看到以下情况时：
 
 - 数据库恢复后先查本地/Bridge 提交注册表。
 - 找到映射：补写 `providerTaskId`，转 `PROCESSING` 并开始轮询。
-- 找不到映射但创建结果未知：保持 `SUBMITTING`，写 `PROVIDER_CREATE_OUTCOME_UNKNOWN`，停止自动提交并等待人工协调。
+- 找不到映射但创建结果未知：进入 `RECONCILIATION_REQUIRED`，写
+  `PROVIDER_CREATE_OUTCOME_UNKNOWN`，保留临时素材，停止自动提交并等待人工协调。
+
+人工恢复命令：
+
+```bash
+pnpm --filter @seedance/worker reconcile:submission inspect --task-id <local-task-id>
+pnpm --filter @seedance/worker reconcile:submission bind --task-id <local-task-id> --provider-task-id <provider-task-id>
+pnpm --filter @seedance/worker reconcile:submission not-created --task-id <local-task-id>
+pnpm --filter @seedance/worker reconcile:submission force-cleanup --task-id <local-task-id> --object-key <exact-object-key>
+```
+
+`bind` 只绑定已核实的远端 ID 并安排 poll；`not-created` 只在人工确认未创建后使用；
+`force-cleanup` 要求提供数据库中完全一致的对象 Key，且不会改变任务终态。
 
 本地注册表只能缩小“远端成功后进程在落盘前崩溃”的窗口，不能提供数学上的 exactly-once。彻底消除该窗口仍需要 Provider 幂等键或按 `clientRequestId` 查询，这一点目前是 `TODO_CONFIRM`，也是 P3 上线收费调用前的关键风险。
 
@@ -367,13 +381,16 @@ supportsCancellation = false
 }
 ```
 
-但当前平台只有受内部 API 控制的 Storage 读取，未提供 Provider 可访问的输入素材 URL。SDK demo 使用外部 URL，不能证明服务商可以访问本服务器的回环地址、Docker 地址或任意私有 URL。
+平台现已实现受内部 API 控制的短期签名输入素材端点，并增加私有 EOS 预签名发布器。
+当前部署不需要自建公网 HTTPS 域名、证书或反向代理；EOS 上传、GET 和删除连通性已
+验收，并已完成一次真实 Provider 拉取。SDK demo 和单次成功都不能证明服务商可以访问
+任意给定 URL。
 
 因此：
 
 - 当前真实 API 的请求形状可以携带 HTTP/HTTPS URL。
-- 当前平台尚不能直接提供可用的 Provider 素材 URL。
-- URL 是否必须公网访问、是否允许签名 URL、允许 host 和最短 TTL 仍为 `TODO_CONFIRM`。
+- 代码可以生成受限的 EOS 预签名 URL，通用 HTTPS GET 已验收。
+- 当前 EOS 签名 URL 与 host 已成功一次；正式允许范围和最短 TTL 仍为 `TODO_CONFIRM`。
 - Python Bridge 不会自动解决素材可达性；现有 SDK 同样把 URL 交给服务商。
 
 ### 9.2 Asset Publisher 抽象
@@ -390,10 +407,11 @@ interface AssetPublisher {
 }
 ```
 
-候选实现按优先级：
+实现选择与未来候选：
 
-1. 已有对象存储生成的短期签名 HTTPS URL。
-2. Seedance Console 新增只读、短期签名、一次用途的素材端点，经已有 HTTPS 反向代理对 Provider 可达。
+1. 私有 EOS 对象存储生成的短期签名 HTTPS URL（已实现并完成连通性验收）。
+2. Seedance Console 只读、短期签名素材端点（代码与 fixture 已完成）；部署正式
+   HTTPS 反向代理后才可能对 Provider 可达。
 3. 若后续确认 Provider 支持独立上传、Base64 或 `file_id`，在 Adapter 内增加对应 publisher。
 
 签名素材端点必须：
@@ -407,7 +425,9 @@ interface AssetPublisher {
 - 默认不向浏览器 capabilities 暴露；
 - URL TTL 覆盖 Provider 拉取素材的时间，但具体最短值等待协议确认。
 
-在素材 URL 可达性未验证前，可以实现和测试纯文生视频 mapping，但不能宣称图生视频链路可用。
+当前已实现单张 PNG/JPEG mapping、本地 fixture E2E、私有 EOS 连通性和一次真实 JPEG
+图生视频。在正式限制尚未确认前，不能把单次成功扩展为其他参数或素材组合。具体实现见
+[Provider 参考图片安全发布](ASSET_PUBLISHING.md)。
 
 ## 10. 是否需要 Python Provider Bridge
 
@@ -499,11 +519,12 @@ Authorization: Bearer <SEEDANCE_BRIDGE_TOKEN>
 
 ### 11.3 素材发布配置
 
-| 变量                             | 必填条件                  | 进程        | 说明                               |
-| -------------------------------- | ------------------------- | ----------- | ---------------------------------- |
-| `SEEDANCE_ASSET_PUBLIC_BASE_URL` | 使用 Console 签名素材端点 | API、Worker | Provider 可访问的 HTTPS 根地址     |
-| `SEEDANCE_ASSET_URL_TTL_MS`      | URL publisher             | Worker      | 必须满足已确认的 Provider 拉取期限 |
-| `SEEDANCE_ASSET_SIGNING_KEY`     | Console 签名素材端点      | API、Worker | secret；不进入 Web/日志            |
+| 变量                             | 必填条件                  | 进程        | 说明                                 |
+| -------------------------------- | ------------------------- | ----------- | ------------------------------------ |
+| `SEEDANCE_ASSET_PUBLIC_BASE_URL` | 使用 Console 签名素材端点 | API、Worker | Provider 可访问的 HTTPS 根地址       |
+| `SEEDANCE_ASSET_URL_TTL_MS`      | URL publisher             | Worker      | 必须满足已确认的 Provider 拉取期限   |
+| `SEEDANCE_ASSET_SIGNING_KEY`     | Console 签名素材端点      | API、Worker | secret；不进入 Web/日志              |
+| `SEEDANCE_ASSET_MAX_BYTES`       | 可选，有安全默认值        | API、Worker | 本地发布上限，不声称为 Provider 限制 |
 
 所有数值配置用 Zod 做整数、正数和合理上限校验。Provider 为 `mock` 时不得要求真实 Provider secrets；Provider 为 `seedance` 时任何必填项缺失都应启动失败。
 
@@ -576,7 +597,7 @@ SDK 已知会记录完整请求体和映射响应，因此 Bridge 上线前必�
 
 - AICC/机密通道是否必须，以及除 Python SDK 外是否存在官方兼容 transport。按当前证据实际调用应选择 Bridge。
 - 真实部署的 Base URL、API Key 和实际模型 ID。它们只由部署环境提供，不写仓库。
-- 本地素材如何获得 Provider 可访问的 HTTPS URL；图生视频联调前必须验证可达性和 TTL。
+- 已成功的 EOS 预签名 URL host、图片约束和 TTL 是否构成正式长期保证。
 - 创建任务远端幂等/按 client request ID 查询能力。未确认时可以实现保守的 outcome-unknown 流程，但不能承诺自动恢复或无重复计费。
 - SDK 日志能否安全关闭/过滤；不满足脱敏要求时不得输入敏感素材。
 - 若使用 SDK，wheel 的部署授权和受控制品来源。

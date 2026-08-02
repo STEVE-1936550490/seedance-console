@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 
 import {
   bridgeCreateVideoTaskRequestSchema,
@@ -6,6 +7,7 @@ import {
   bridgeErrorResponseSchema,
   bridgeHealthResponseSchema,
   bridgeQueryVideoTaskResponseSchema,
+  bridgeRecoverVideoTaskRequestSchema,
   bridgeRecoverVideoTaskResponseSchema,
   type BridgeCreateVideoTaskRequest,
   type BridgeCreateVideoTaskResponse,
@@ -14,6 +16,7 @@ import {
 } from "./bridge-contract.js";
 import {
   ProviderAuthenticationError,
+  ProviderCreateNotSentError,
   ProviderDownloadValidationError,
   ProviderOutputExpiredError,
   ProviderOutcomeUnknownError,
@@ -85,18 +88,31 @@ export class SeedanceBridgeClient {
         "Bridge create request does not match the contract."
       );
     }
+    const bridgeRequestId = randomUUID();
+    const requestStartedAt = new Date().toISOString();
     const response = await this.request("/v1/video/tasks", {
       method: "POST",
       operation: "CREATE",
       timeoutMs: this.requestTimeoutMs,
       retry: "MANUAL_RECONCILIATION",
-      body: JSON.stringify(request.data)
+      body: JSON.stringify(request.data),
+      headers: { "X-Bridge-Request-Id": bridgeRequestId }
     });
-    return parseJsonResponse(
-      response,
-      bridgeCreateVideoTaskResponseSchema,
-      "CREATE"
+    const parsed = bridgeCreateVideoTaskResponseSchema.safeParse(
+      await response.json().catch(() => undefined)
     );
+    if (!parsed.success) {
+      throw new ProviderOutcomeUnknownError(undefined, {
+        bridgeRequestId,
+        requestStartedAt,
+        requestEndedAt: new Date().toISOString(),
+        failureStage: "BRIDGE_PARSE_RESPONSE",
+        exceptionType: "BridgeCreateResponseValidationError",
+        requestBodySent: true,
+        providerHttpStatus: response.status
+      });
+    }
+    return parsed.data;
   }
 
   async getTask(providerTaskId: string): Promise<BridgeQueryVideoTaskResponse> {
@@ -117,15 +133,16 @@ export class SeedanceBridgeClient {
   }
 
   async recoverTask(clientRequestId: string): Promise<string | null> {
-    const response = await this.request(
-      `/v1/video/submissions/${encodeIdentifier(clientRequestId, "RECOVER")}`,
-      {
-        method: "GET",
-        operation: "RECOVER",
-        timeoutMs: this.requestTimeoutMs,
-        retry: "SAFE_READ"
-      }
-    );
+    const request = bridgeRecoverVideoTaskRequestSchema.parse({
+      clientRequestId
+    });
+    const response = await this.request("/v1/video/tasks/recover", {
+      method: "POST",
+      operation: "RECOVER",
+      timeoutMs: this.requestTimeoutMs,
+      retry: "SAFE_READ",
+      body: JSON.stringify(request)
+    });
     return (
       await parseJsonResponse(
         response,
@@ -195,8 +212,10 @@ export class SeedanceBridgeClient {
       timeoutMs: number;
       retry: ProviderRetry;
       body?: string;
+      headers?: Readonly<Record<string, string>>;
     }
   ): Promise<Response> {
+    const requestStartedAt = new Date().toISOString();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs);
     timer.unref();
@@ -213,7 +232,8 @@ export class SeedanceBridgeClient {
             Authorization: `Bearer ${this.token}`,
             ...(options.body === undefined
               ? {}
-              : { "Content-Type": "application/json" })
+              : { "Content-Type": "application/json" }),
+            ...options.headers
           },
           ...(options.body === undefined ? {} : { body: options.body }),
           signal: controller.signal
@@ -230,6 +250,7 @@ export class SeedanceBridgeClient {
     } catch (error) {
       if (
         error instanceof ProviderAuthenticationError ||
+        error instanceof ProviderCreateNotSentError ||
         error instanceof ProviderDownloadValidationError ||
         error instanceof ProviderOutputExpiredError ||
         error instanceof ProviderRateLimitError ||
@@ -242,7 +263,24 @@ export class SeedanceBridgeClient {
         throw error;
       }
       if (options.operation === "CREATE") {
-        throw new ProviderOutcomeUnknownError(error);
+        if (isConfirmedConnectFailure(error)) {
+          throw new ProviderCreateNotSentError(error, {
+            bridgeRequestId:
+              options.headers?.["X-Bridge-Request-Id"] ?? "unknown",
+            failureStage: "BRIDGE_CONNECT",
+            requestBodySent: false,
+            exceptionType: safeExceptionType(error)
+          });
+        }
+        throw new ProviderOutcomeUnknownError(error, {
+          bridgeRequestId:
+            options.headers?.["X-Bridge-Request-Id"] ?? "unknown",
+          requestStartedAt,
+          requestEndedAt: new Date().toISOString(),
+          failureStage: "BRIDGE_READ_RESPONSE",
+          requestBodySent: true,
+          exceptionType: safeExceptionType(error)
+        });
       }
       throw new ProviderTransientError(options.operation, { cause: error });
     } finally {
@@ -290,7 +328,22 @@ export class SeedanceBridgeClient {
     }
     if (response.status >= 500) {
       if (operation === "CREATE") {
-        throw new ProviderOutcomeUnknownError();
+        const audit = structuredError.data.error.audit;
+        if (structuredError.data.error.code === "PROVIDER_CREATE_NOT_SENT") {
+          throw new ProviderCreateNotSentError(undefined, audit);
+        }
+        if (
+          structuredError.data.error.code === "PROVIDER_CREATE_HTTP_ERROR" &&
+          audit?.providerHttpStatus !== undefined &&
+          audit.providerHttpStatus < 500
+        ) {
+          throw new ProviderRequestError(
+            operation,
+            audit.providerHttpStatus,
+            audit
+          );
+        }
+        throw new ProviderOutcomeUnknownError(undefined, audit);
       }
       throw new ProviderTransientError(operation, {
         statusCode: response.status
@@ -298,6 +351,30 @@ export class SeedanceBridgeClient {
     }
     throw new ProviderRequestError(operation, response.status);
   }
+}
+
+function isConfirmedConnectFailure(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    const code = (current as Error & { code?: unknown }).code;
+    if (
+      code === "ECONNREFUSED" ||
+      code === "ENOTFOUND" ||
+      code === "EAI_AGAIN"
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
+function safeExceptionType(error: unknown): string {
+  return error instanceof Error && /^[A-Za-z0-9_.-]{1,128}$/.test(error.name)
+    ? error.name
+    : "Error";
 }
 
 async function parseJsonResponse<T>(

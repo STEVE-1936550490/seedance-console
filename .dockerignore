@@ -12,3 +12,4 @@ storage
 tmp
 *.log
 pythonSDK-*.zip
+!pythonSDK-0515.zip

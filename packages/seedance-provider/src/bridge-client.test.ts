@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { SeedanceBridgeClient } from "./bridge-client.js";
 import {
   ProviderAuthenticationError,
+  ProviderCreateNotSentError,
   ProviderOutcomeUnknownError,
   ProviderProtocolError,
   ProviderRateLimitError,
@@ -30,6 +31,7 @@ describe("SeedanceBridgeClient", () => {
   let client: SeedanceBridgeClient;
   let lastAuthorization: string | null;
   let lastCreateBody: unknown;
+  let lastBridgeRequestId: string | null;
   let createRequests = 0;
   const fixtures = new Map<string, unknown>();
 
@@ -58,12 +60,20 @@ describe("SeedanceBridgeClient", () => {
     const before = createRequests;
     await expect(
       client.createTask(fixtureCreateRequest("create-success"))
-    ).resolves.toEqual({ id: "fixture-provider-task-1" });
+    ).resolves.toMatchObject({
+      id: "fixture-provider-task-1",
+      audit: {
+        requestStartedAt: "2026-08-02T14:50:34.783Z",
+        requestEndedAt: "2026-08-02T14:50:47.018Z",
+        requestBodySent: true
+      }
+    });
     expect(createRequests - before).toBe(1);
     expect(lastCreateBody).toMatchObject({
       clientRequestId: "create-success",
       request: { ratio: "16:9", duration: 11 }
     });
+    expect(lastBridgeRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
   });
 
   it("recovers a registered submission without creating again", async () => {
@@ -122,6 +132,36 @@ describe("SeedanceBridgeClient", () => {
     expect(createRequests - before).toBe(1);
   });
 
+  it("treats an invalid successful create response as outcome unknown", async () => {
+    const before = createRequests;
+    const error = await client
+      .createTask(fixtureCreateRequest("create-invalid-success"))
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(ProviderOutcomeUnknownError);
+    expect(error).toMatchObject({
+      audit: {
+        failureStage: "BRIDGE_PARSE_RESPONSE",
+        requestBodySent: true,
+        providerHttpStatus: 200
+      }
+    });
+    expect(createRequests - before).toBe(1);
+  });
+
+  it("classifies a confirmed connect failure as not sent", async () => {
+    const error = await client
+      .createTask(fixtureCreateRequest("create-not-sent"))
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(ProviderCreateNotSentError);
+    expect(error).toMatchObject({
+      audit: {
+        bridgeRequestId: "bridge-request-fixture",
+        failureStage: "CONNECT",
+        requestBodySent: false
+      }
+    });
+  });
+
   it("reports cancellation as unsupported", async () => {
     await expect(client.cancelTask("running")).rejects.toBeInstanceOf(
       ProviderUnsupportedOperationError
@@ -161,20 +201,44 @@ describe("SeedanceBridgeClient", () => {
 
       if (method === "POST" && url.pathname === "/v1/video/tasks") {
         createRequests += 1;
+        lastBridgeRequestId = headers.get("x-bridge-request-id");
         lastCreateBody = JSON.parse(String(init?.body)) as unknown;
         const requestId = getClientRequestId(lastCreateBody);
-        return requestId === "create-server-error"
-          ? bridgeErrorResponse(500, "CREATE", "SAFE_READ")
-          : jsonResponse(200, fixtures.get("create-success"));
+        if (requestId === "create-server-error") {
+          return bridgeErrorResponse(500, "CREATE", "SAFE_READ");
+        }
+        if (requestId === "create-not-sent") {
+          return bridgeErrorResponse(
+            502,
+            "CREATE",
+            "NEVER",
+            "PROVIDER_CREATE_NOT_SENT",
+            {
+              bridgeRequestId: "bridge-request-fixture",
+              failureStage: "CONNECT",
+              requestBodySent: false
+            }
+          );
+        }
+        if (requestId === "create-invalid-success") {
+          return jsonResponse(200, {
+            id: "provider-task-created",
+            audit: {
+              bridgeRequestId: "bridge-request-invalid",
+              requestStartedAt: "2026-08-02 14:50:34"
+            }
+          });
+        }
+        return jsonResponse(200, fixtures.get("create-success"));
       }
 
-      const submissionMatch = url.pathname.match(
-        /^\/v1\/video\/submissions\/([^/]+)$/
-      );
-      if (method === "GET" && submissionMatch !== null) {
+      if (method === "POST" && url.pathname === "/v1/video/tasks/recover") {
+        const request = JSON.parse(String(init?.body)) as {
+          clientRequestId?: string;
+        };
         return jsonResponse(200, {
           id:
-            decodeURIComponent(submissionMatch[1] ?? "") === "registered"
+            request.clientRequestId === "registered"
               ? "fixture-provider-task-1"
               : null
         });
@@ -232,7 +296,7 @@ function fixtureCreateRequest(clientRequestId: string) {
     model: "fixture-model",
     request: {
       content: [{ type: "text" as const, text: "fixture prompt" }],
-      generate_audio: true as const,
+      generate_audio: false,
       ratio: "16:9" as const,
       duration: 11 as const,
       watermark: false as const
@@ -264,7 +328,8 @@ function bridgeErrorResponse(
   status: number,
   operation: "CREATE" | "GET" | "CANCEL",
   retry: "NEVER" | "SAFE_READ",
-  code = "FIXTURE_ERROR"
+  code = "FIXTURE_ERROR",
+  audit?: Record<string, unknown>
 ): Response {
   return jsonResponse(status, {
     error: {
@@ -272,7 +337,8 @@ function bridgeErrorResponse(
       message: "Fixture Bridge error.",
       operation,
       retry,
-      requestId: "fixture-request-id"
+      requestId: "fixture-request-id",
+      ...(audit === undefined ? {} : { audit })
     }
   });
 }

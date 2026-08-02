@@ -128,7 +128,7 @@ Mock 实现必须：
 - 对未知参数报验证错误；Mock 参数放在独立 schema 中，明确标记为测试专用。
 
 单元测试覆盖创建幂等、所有状态映射、错误分类、取消能力、用量为空和响应校验。
-契约测试约束 Mock 与 Seedance fake Bridge runtime；唯一真实 Demo 另行验证 AICC
+契约测试约束 Mock 与 Seedance fake Bridge runtime；真实 Demo 另行验证 AICC
 create、poll、download 和持久化闭环，不作为日常自动化测试依赖。
 
 ## 6. 真实 Provider 剩余协议清单

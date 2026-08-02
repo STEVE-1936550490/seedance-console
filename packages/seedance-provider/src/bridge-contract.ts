@@ -23,29 +23,31 @@ const bridgeReferenceVideoContentSchema = z
   })
   .strict();
 
-const bridgeAudioContentSchema = z
-  .object({
-    type: z.literal("audio_url"),
-    audio_url: z.object({ url: z.string().url() }).strict(),
-    role: z.literal("reference_audio")
-  })
-  .strict();
-
 export const bridgeVideoContentSchema = z.discriminatedUnion("type", [
   bridgeTextContentSchema,
   bridgeImageContentSchema,
-  bridgeReferenceVideoContentSchema,
-  bridgeAudioContentSchema
+  bridgeReferenceVideoContentSchema
+]);
+
+const bridgeContentSchema = z.union([
+  z.tuple([bridgeTextContentSchema]),
+  z.tuple([bridgeTextContentSchema, bridgeImageContentSchema]),
+  z.tuple([bridgeTextContentSchema, bridgeReferenceVideoContentSchema])
 ]);
 
 export const bridgeCreateVideoTaskRequestSchema = z
   .object({
     clientRequestId: z.string().min(1).max(128),
+    createAttemptId: z.string().min(1).max(128).optional(),
+    requestPayloadSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
     model: z.string().min(1),
     request: z
       .object({
-        content: z.array(bridgeVideoContentSchema).min(1),
-        generate_audio: z.literal(true),
+        content: bridgeContentSchema,
+        generate_audio: z.boolean(),
         ratio: z.literal("16:9"),
         duration: z.literal(11),
         watermark: z.literal(false)
@@ -54,15 +56,42 @@ export const bridgeCreateVideoTaskRequestSchema = z
   })
   .strict();
 
+const iso8601InstantSchema = z
+  .string()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value).toISOString());
+
+const bridgeCreateAuditSchema = z
+  .object({
+    bridgeRequestId: z.string().min(1).max(128),
+    requestStartedAt: iso8601InstantSchema.optional(),
+    requestEndedAt: iso8601InstantSchema.optional(),
+    failureStage: z.string().min(1).max(128).optional(),
+    exceptionType: z.string().min(1).max(128).optional(),
+    requestBodySent: z.boolean().optional(),
+    providerHttpStatus: z.number().int().optional(),
+    providerErrorCode: z.string().min(1).max(128).optional(),
+    providerRequestId: z.string().min(1).max(128).optional(),
+    providerTraceId: z.string().min(1).max(128).optional()
+  })
+  .strict();
+
 export const bridgeCreateVideoTaskResponseSchema = z
   .object({
-    id: z.string().min(1)
+    id: z.string().min(1),
+    audit: bridgeCreateAuditSchema.optional()
   })
   .strict();
 
 export const bridgeRecoverVideoTaskResponseSchema = z
   .object({
     id: z.string().min(1).nullable()
+  })
+  .strict();
+
+export const bridgeRecoverVideoTaskRequestSchema = z
+  .object({
+    clientRequestId: z.string().min(1).max(128)
   })
   .strict();
 
@@ -111,7 +140,8 @@ export const bridgeErrorResponseSchema = z
           "MANUAL_RECONCILIATION"
         ]),
         retryAfterMs: z.number().int().nonnegative().optional(),
-        requestId: z.string().min(1).optional()
+        requestId: z.string().min(1).optional(),
+        audit: bridgeCreateAuditSchema.optional()
       })
       .strict()
   })
@@ -126,6 +156,9 @@ export type BridgeCreateVideoTaskResponse = z.infer<
 >;
 export type BridgeRecoverVideoTaskResponse = z.infer<
   typeof bridgeRecoverVideoTaskResponseSchema
+>;
+export type BridgeRecoverVideoTaskRequest = z.infer<
+  typeof bridgeRecoverVideoTaskRequestSchema
 >;
 export type BridgeQueryVideoTaskResponse = z.infer<
   typeof bridgeQueryVideoTaskResponseSchema

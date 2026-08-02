@@ -1,0 +1,2 @@
+# The production SDK wheel is supplied from the audited root ZIP at image build.
+socksio==1.0.0

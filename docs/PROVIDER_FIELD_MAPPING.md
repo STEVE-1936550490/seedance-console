@@ -29,17 +29,17 @@ interface SeedanceParameters {
 
 初始 capabilities 只能暴露当前材料已经出现的字段和值，并要求四个参数显式存在；这样既不猜默认值，也不会发出 demo 从未展示过的缺字段请求：
 
-| 内部字段          | 类型      | 当前可用于设计的值                                      | 说明                                                       |
-| ----------------- | --------- | ------------------------------------------------------- | ---------------------------------------------------------- |
-| `model`           | string    | 由 `SEEDANCE_MODEL_ID` 提供                             | demo 模型名只是示例，不硬编码为生产模型                    |
-| `prompt`          | string    | 非空字符串                                              | Provider 文本长度上限 `TODO_CONFIRM`；保留当前平台自身校验 |
-| `assets[].role`   | enum      | `REFERENCE_IMAGE`、`REFERENCE_VIDEO`、`REFERENCE_AUDIO` | 当前数据库/UI 只实现图片；视频/音频是目标契约              |
-| `assets[].url`    | HTTPS URL | 由 Asset Publisher 生成                                 | URL 可达性和 TTL `TODO_CONFIRM`                            |
-| `ratio`           | string    | 当前仅有示例 `"16:9"`                                   | 不扩展为其他比例                                           |
-| `duration`        | number    | 当前仅有示例 `11`                                       | 单位和完整范围仍为 `TODO_CONFIRM`                          |
-| `generateAudio`   | boolean   | 当前示例为 `true`                                       | 默认值和限制 `TODO_CONFIRM`；初始要求显式值                |
-| `watermark`       | boolean   | 当前示例为 `false`                                      | 默认值和限制 `TODO_CONFIRM`；初始要求显式值                |
-| `clientRequestId` | string    | 内部唯一值                                              | 当前没有已确认的远端字段，仅用于本地提交保护               |
+| 内部字段          | 类型      | 当前可用于设计的值                    | 说明                                                           |
+| ----------------- | --------- | ------------------------------------- | -------------------------------------------------------------- |
+| `model`           | string    | 由 `SEEDANCE_MODEL_ID` 提供           | demo 模型名只是示例，不硬编码为生产模型                        |
+| `prompt`          | string    | 非空字符串                            | Provider 文本长度上限 `TODO_CONFIRM`；保留当前平台自身校验     |
+| `assets[].role`   | enum      | `REFERENCE_IMAGE` / `REFERENCE_VIDEO` | 当前只允许一张图片或一段视频；音频不进入当前契约               |
+| `assets[].url`    | HTTPS URL | 由 Asset Publisher 生成               | EOS URL 与 Provider 拉取已验收一次；正式 TTL 仍 `TODO_CONFIRM` |
+| `ratio`           | string    | 当前仅有示例 `"16:9"`                 | 不扩展为其他比例                                               |
+| `duration`        | number    | 当前仅有示例 `11`                     | 单位和完整范围仍为 `TODO_CONFIRM`                              |
+| `generateAudio`   | boolean   | 当前示例为 `true`                     | 默认值和限制 `TODO_CONFIRM`；初始要求显式值                    |
+| `watermark`       | boolean   | 当前示例为 `false`                    | 默认值和限制 `TODO_CONFIRM`；初始要求显式值                    |
+| `clientRequestId` | string    | 内部唯一值                            | 当前没有已确认的远端字段，仅用于本地提交保护                   |
 
 当前 Mock 专用字段不映射到真实 API：
 
@@ -52,7 +52,7 @@ interface SeedanceParameters {
 
 ## 3. 创建任务请求映射
 
-已确认的目标请求形状：
+已确认的图片目标请求形状：
 
 ```json
 {
@@ -76,6 +76,19 @@ interface SeedanceParameters {
 }
 ```
 
+SDK 1.0.0 已审计确认的视频替代项如下；请求中存在该项时，SDK 自动附加
+`Input-Has-Video: true`：
+
+```json
+{
+  "type": "video_url",
+  "video_url": {
+    "url": "<published-asset-url>"
+  },
+  "role": "reference_video"
+}
+```
+
 SDK 会加入或覆盖 `model`。Direct transport 若未来可用，也必须按已确认协议处理模型映射，不能假定请求模型值等于最终 endpoint。
 
 | 内部来源                    | Provider 字段                     | 转换                                                        |
@@ -86,19 +99,20 @@ SDK 会加入或覆盖 `model`。Direct transport 若未来可用，也必须按
 | `REFERENCE_IMAGE` asset     | `content[n].type`                 | 固定 `"image_url"`                                          |
 | `REFERENCE_IMAGE` asset URL | `content[n].image_url.url`        | Asset Publisher 生成的 Provider 可访问 URL                  |
 | `REFERENCE_IMAGE` role      | `content[n].role`                 | 固定 `"reference_image"`                                    |
-| `REFERENCE_VIDEO` asset     | `content[n].type`                 | 固定 `"video_url"`                                          |
-| `REFERENCE_VIDEO` asset URL | `content[n].video_url.url`        | Asset Publisher 生成的 URL                                  |
+| `REFERENCE_VIDEO` asset     | `content[n].type`                 | 固定 `"video_url"`；SDK 据此附加 `Input-Has-Video`          |
+| `REFERENCE_VIDEO` asset URL | `content[n].video_url.url`        | Asset Publisher 生成的限时 Provider 可访问 URL              |
 | `REFERENCE_VIDEO` role      | `content[n].role`                 | 固定 `"reference_video"`                                    |
-| `REFERENCE_AUDIO` asset     | `content[n].type`                 | 固定 `"audio_url"`                                          |
-| `REFERENCE_AUDIO` asset URL | `content[n].audio_url.url`        | Asset Publisher 生成的 URL                                  |
-| `REFERENCE_AUDIO` role      | `content[n].role`                 | 固定 `"reference_audio"`                                    |
 | `parameters.generateAudio`  | `generate_audio`                  | camelCase 转 snake_case；初始值必须显式通过 capability 校验 |
 | `parameters.ratio`          | `ratio`                           | 字符串原值；仅允许 capability manifest 已确认值             |
 | `parameters.duration`       | `duration`                        | number 原值；当前仅允许已确认示例值                         |
 | `parameters.watermark`      | `watermark`                       | camelCase 转 snake_case；初始值必须显式通过 capability 校验 |
 | `clientRequestId`           | 无已确认字段                      | 只用于本地/Bridge 提交注册表，不发送未知字段                |
 
-字段顺序不作为协议语义。`content` 项顺序和组合约束仍为 `TODO_CONFIRM`；初始实现维持确定性顺序：文本、参考图片、参考视频、参考音频，同类按 `position` 排序。
+当前实现的 `content` 为 `[text]`、`[text, reference_image]` 或
+`[text, reference_video]`。任务最多包含一项素材：图片允许 PNG/JPEG，单参考视频 MVP
+只开放 MP4 和 2～15 秒的本地安全策略。公开资料列出的多视频、MOV、分辨率等能力只作
+模型侧参考，不写成当前 AICC 租户合同限制；音频仍未实现。详见
+[单参考视频 MVP](REFERENCE_VIDEO_MVP.md)。
 
 ### 3.1 不得发送的字段
 

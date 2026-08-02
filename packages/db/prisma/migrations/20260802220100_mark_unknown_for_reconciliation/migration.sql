@@ -1,0 +1,5 @@
+UPDATE "VideoTask"
+SET "status" = 'RECONCILIATION_REQUIRED'
+WHERE "status" = 'SUBMITTING'
+  AND "providerTaskId" IS NULL
+  AND "errorCode" = 'PROVIDER_CREATE_OUTCOME_UNKNOWN';

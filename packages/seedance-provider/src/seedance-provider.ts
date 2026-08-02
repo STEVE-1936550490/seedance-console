@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type {
   BridgeCreateVideoTaskRequest,
+  BridgeCreateVideoTaskResponse,
   BridgeQueryVideoTaskResponse,
   BridgeVideoContent
 } from "./bridge-contract.js";
@@ -28,7 +29,7 @@ const seedanceParametersSchema = z
   .object({
     ratio: z.literal("16:9"),
     duration: z.literal(11),
-    generateAudio: z.literal(true),
+    generateAudio: z.boolean(),
     watermark: z.literal(false)
   })
   .strict();
@@ -52,7 +53,11 @@ export class SeedanceProviderDefinition implements ProviderDefinition {
       label: "Seedance Video",
       testOnly: false,
       supportsCancellation: false,
-      acceptedAssetTypes: ["image", "video", "audio"],
+      supportsReferenceImage: true,
+      maxReferenceImages: 1,
+      supportsReferenceVideo: true,
+      maxReferenceVideos: 1,
+      acceptedAssetTypes: ["image", "video"],
       models: [
         {
           id: this.modelId,
@@ -86,7 +91,7 @@ export class SeedanceProviderDefinition implements ProviderDefinition {
               description: "首版显式发送现有 Demo 已出现的值。",
               type: "boolean",
               required: true,
-              defaultValue: true,
+              defaultValue: false,
               group: "advanced"
             },
             {
@@ -148,7 +153,9 @@ export interface SeedanceProviderAdapterOptions extends SeedanceProviderDefiniti
 }
 
 export interface SeedanceBridgeTransport {
-  createTask(input: BridgeCreateVideoTaskRequest): Promise<{ id: string }>;
+  createTask(
+    input: BridgeCreateVideoTaskRequest
+  ): Promise<BridgeCreateVideoTaskResponse>;
   recoverTask(clientRequestId: string): Promise<string | null>;
   getTask(providerTaskId: string): Promise<BridgeQueryVideoTaskResponse>;
   downloadOutput(providerTaskId: string): Promise<ProviderDownload>;
@@ -170,25 +177,50 @@ export class SeedanceProviderAdapter
     if (!validation.ok) {
       throw new ProviderValidationError();
     }
-    if (
-      input.referenceAssetIds.length > 0 &&
-      (input.publishedAssets?.length ?? 0) !== input.referenceAssetIds.length
-    ) {
+    const publishedAssets = input.publishedAssets ?? [];
+    if (publishedAssets.length !== input.referenceAssetIds.length) {
       throw new ProviderValidationError(
         "Every referenced asset must have a published Provider URL."
       );
     }
+    if (input.referenceAssetIds.length > 1) {
+      throw new ProviderValidationError(
+        "Seedance MVP supports exactly one reference asset at most."
+      );
+    }
+    for (const [position, asset] of publishedAssets.entries()) {
+      if (
+        asset.assetId !== input.referenceAssetIds[position] ||
+        asset.position !== position ||
+        !isSupportedPublishedAsset(asset) ||
+        !/^[a-f0-9]{64}$/.test(asset.checksum) ||
+        asset.sizeBytes <= 0 ||
+        asset.expiresAt.getTime() <= Date.now() ||
+        !isHttpsUrl(asset.url)
+      ) {
+        throw new ProviderValidationError(
+          "Published reference asset is invalid or expired."
+        );
+      }
+    }
+    const textContent = { type: "text" as const, text: input.prompt };
+    const content: BridgeCreateVideoTaskRequest["request"]["content"] =
+      publishedAssets.length === 0
+        ? [textContent]
+        : publishedAssets[0]!.role === "REFERENCE_IMAGE"
+          ? [textContent, toBridgeImageContent(publishedAssets[0]!)]
+          : [textContent, toBridgeVideoContent(publishedAssets[0]!)];
     const request: BridgeCreateVideoTaskRequest = {
       clientRequestId: input.clientRequestId,
+      ...(input.createAttemptId === undefined
+        ? {}
+        : { createAttemptId: input.createAttemptId }),
+      ...(input.requestPayloadSha256 === undefined
+        ? {}
+        : { requestPayloadSha256: input.requestPayloadSha256 }),
       model: input.model,
       request: {
-        content: [
-          { type: "text", text: input.prompt },
-          ...(input.publishedAssets ?? [])
-            .slice()
-            .sort((left, right) => left.position - right.position)
-            .map(toBridgeContent)
-        ],
+        content,
         generate_audio: validation.value.generateAudio,
         ratio: validation.value.ratio,
         duration: validation.value.duration,
@@ -200,7 +232,8 @@ export class SeedanceProviderAdapter
       providerTaskId: created.id,
       status: "PROCESSING",
       outputs: [],
-      usage: []
+      usage: [],
+      ...(created.audit === undefined ? {} : { createAudit: created.audit })
     };
   }
 
@@ -273,25 +306,43 @@ export class SeedanceProviderAdapter
   }
 }
 
-function toBridgeContent(asset: PublishedProviderAsset): BridgeVideoContent {
-  switch (asset.role) {
-    case "REFERENCE_IMAGE":
-      return {
-        type: "image_url",
-        image_url: { url: asset.url },
-        role: "reference_image"
-      };
-    case "REFERENCE_VIDEO":
-      return {
-        type: "video_url",
-        video_url: { url: asset.url },
-        role: "reference_video"
-      };
-    case "REFERENCE_AUDIO":
-      return {
-        type: "audio_url",
-        audio_url: { url: asset.url },
-        role: "reference_audio"
-      };
+function toBridgeImageContent(
+  asset: PublishedProviderAsset
+): Extract<BridgeVideoContent, { type: "image_url" }> {
+  return {
+    type: "image_url",
+    image_url: { url: asset.url },
+    role: "reference_image"
+  };
+}
+
+function toBridgeVideoContent(
+  asset: PublishedProviderAsset
+): Extract<BridgeVideoContent, { type: "video_url" }> {
+  return {
+    type: "video_url",
+    video_url: { url: asset.url },
+    role: "reference_video"
+  };
+}
+
+function isSupportedPublishedAsset(asset: PublishedProviderAsset): boolean {
+  if (asset.role === "REFERENCE_IMAGE") {
+    return asset.mimeType === "image/png" || asset.mimeType === "image/jpeg";
+  }
+  return (
+    asset.mimeType === "video/mp4" &&
+    asset.metadata !== undefined &&
+    asset.metadata.container === "mp4" &&
+    asset.metadata.durationSeconds >= 2 &&
+    asset.metadata.durationSeconds <= 15
+  );
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
   }
 }

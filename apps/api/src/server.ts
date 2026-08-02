@@ -15,7 +15,7 @@ export async function buildServer(
 
   await server.register(cors, {
     origin: options.webOrigin,
-    methods: ["GET", "POST"]
+    methods: ["GET", "HEAD", "POST"]
   });
 
   server.get("/health", async (_request, reply) => {

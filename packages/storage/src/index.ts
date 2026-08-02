@@ -282,3 +282,7 @@ function validateOperationOptions(options: {
     throw new Error("Storage timeoutMs must be a positive safe integer.");
   }
 }
+
+export * from "./asset-publisher.js";
+export * from "./s3-presigned-asset-publisher.js";
+export * from "./video-inspector.js";

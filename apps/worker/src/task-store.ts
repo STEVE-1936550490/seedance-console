@@ -7,6 +7,8 @@ import {
   type PrismaClient
 } from "@prisma/client";
 import type { ProviderUsage } from "@seedance/seedance-provider";
+import type { ProviderCreateAudit } from "@seedance/seedance-provider";
+import type { PublishedRemoteObject } from "@seedance/storage";
 
 export interface SubmissionTask {
   id: string;
@@ -18,6 +20,7 @@ export interface SubmissionTask {
   prompt: string;
   parameters: Prisma.JsonValue;
   referenceAssetIds: readonly string[];
+  referenceAssetRoles?: readonly ("REFERENCE_IMAGE" | "REFERENCE_VIDEO")[];
   recoveredProviderTaskId: string | null;
 }
 
@@ -26,6 +29,13 @@ export interface InitialPollSchedule {
   nextPollAt: Date;
   pollDeadlineAt: Date;
   pollVersion: number;
+  createAudit?: ProviderCreateAudit;
+}
+
+export interface SubmissionAttemptAudit {
+  createAttemptId: string;
+  requestPayloadSha256: string;
+  requestStartedAt: Date;
 }
 
 export interface PollClaim {
@@ -83,12 +93,49 @@ export interface StoredVideoOutput extends VideoOutputMetadata {
 export interface TaskStore {
   loadSubmissionTask(taskId: string): Promise<SubmissionTask | null>;
   claimSubmission(task: SubmissionTask): Promise<boolean>;
+  recordSubmissionAttempt(
+    task: SubmissionTask,
+    audit: SubmissionAttemptAudit
+  ): Promise<void>;
+  recordSubmissionResultAudit(
+    task: SubmissionTask,
+    audit: ProviderCreateAudit
+  ): Promise<void>;
   acceptSubmission(
     task: SubmissionTask,
     providerTaskId: string,
     schedule: InitialPollSchedule
   ): Promise<boolean>;
-  markSubmissionOutcomeUnknown(task: SubmissionTask): Promise<void>;
+  markSubmissionOutcomeUnknown(
+    task: SubmissionTask,
+    audit?: ProviderCreateAudit
+  ): Promise<void>;
+  markSubmissionFailed(
+    task: SubmissionTask,
+    now: Date,
+    errorCode: string,
+    audit?: ProviderCreateAudit
+  ): Promise<void>;
+  recordPublishedAsset(
+    taskId: string,
+    assetId: string,
+    remoteObject: PublishedRemoteObject,
+    expiresAt: Date
+  ): Promise<void>;
+  findPublishedAssets(
+    taskId: string
+  ): Promise<readonly PublishedRemoteObject[]>;
+  findTerminalTasksWithPublishedAssets(
+    limit: number
+  ): Promise<readonly string[]>;
+  markPublishedAssetDeleted(
+    remoteObject: PublishedRemoteObject,
+    deletedAt: Date
+  ): Promise<void>;
+  markPublishedAssetCleanupFailed(
+    remoteObject: PublishedRemoteObject,
+    errorCode: string
+  ): Promise<void>;
   claimPoll(
     taskId: string,
     pollVersion: number,
@@ -112,6 +159,12 @@ export interface TaskStore {
     now: Date,
     errorCode: string,
     errorMessage: string,
+    providerStatus?: string
+  ): Promise<boolean>;
+  markProviderStopped(
+    claim: PollClaim,
+    now: Date,
+    status: Extract<TaskStatus, "CANCELLED" | "EXPIRED">,
     providerStatus?: string
   ): Promise<boolean>;
   stopPollingForManualReview(
@@ -165,8 +218,11 @@ export class PrismaTaskStore implements TaskStore {
       include: {
         submission: true,
         assets: {
-          where: { role: AssetRole.REFERENCE_IMAGE },
-          select: { assetId: true }
+          where: {
+            role: { in: [AssetRole.REFERENCE_IMAGE, AssetRole.REFERENCE_VIDEO] }
+          },
+          orderBy: { position: "asc" },
+          select: { assetId: true, role: true }
         }
       }
     });
@@ -181,6 +237,11 @@ export class PrismaTaskStore implements TaskStore {
       prompt: task.prompt,
       parameters: task.parameters,
       referenceAssetIds: task.assets.map((asset) => asset.assetId),
+      referenceAssetRoles: task.assets.map((asset) =>
+        asset.role === AssetRole.REFERENCE_VIDEO
+          ? "REFERENCE_VIDEO"
+          : "REFERENCE_IMAGE"
+      ),
       recoveredProviderTaskId: task.submission?.providerTaskId ?? null
     };
   }
@@ -221,6 +282,39 @@ export class PrismaTaskStore implements TaskStore {
     });
   }
 
+  async recordSubmissionAttempt(
+    task: SubmissionTask,
+    audit: SubmissionAttemptAudit
+  ): Promise<void> {
+    await this.prisma.providerSubmission.update({
+      where: { taskId: task.id },
+      data: {
+        createAttemptId: audit.createAttemptId,
+        requestPayloadSha256: audit.requestPayloadSha256,
+        requestStartedAt: audit.requestStartedAt,
+        requestEndedAt: null,
+        failureStage: null,
+        exceptionType: null,
+        requestBodySent: null,
+        providerHttpStatus: null,
+        providerErrorCode: null,
+        bridgeRequestId: null,
+        providerRequestId: null,
+        providerTraceId: null
+      }
+    });
+  }
+
+  async recordSubmissionResultAudit(
+    task: SubmissionTask,
+    audit: ProviderCreateAudit
+  ): Promise<void> {
+    await this.prisma.providerSubmission.update({
+      where: { taskId: task.id },
+      data: submissionAuditData(audit)
+    });
+  }
+
   acceptSubmission(
     task: SubmissionTask,
     providerTaskId: string,
@@ -248,7 +342,8 @@ export class PrismaTaskStore implements TaskStore {
           lastPollError: null,
           downloadPending: false,
           errorCode: null,
-          errorMessage: null
+          errorMessage: null,
+          providerAssetCleanupReadyAt: null
         }
       });
       await transaction.providerSubmission.upsert({
@@ -259,13 +354,15 @@ export class PrismaTaskStore implements TaskStore {
           clientRequestId: task.clientRequestId,
           providerTaskId,
           status: ProviderSubmissionStatus.ACCEPTED,
-          acceptedAt: schedule.now
+          acceptedAt: schedule.now,
+          ...submissionAuditData(schedule.createAudit)
         },
         update: {
           providerTaskId,
           status: ProviderSubmissionStatus.ACCEPTED,
           acceptedAt: schedule.now,
-          errorCode: null
+          errorCode: null,
+          ...submissionAuditData(schedule.createAudit)
         }
       });
       if (accepted.count !== 1) return false;
@@ -281,7 +378,10 @@ export class PrismaTaskStore implements TaskStore {
     });
   }
 
-  async markSubmissionOutcomeUnknown(task: SubmissionTask): Promise<void> {
+  async markSubmissionOutcomeUnknown(
+    task: SubmissionTask,
+    audit?: ProviderCreateAudit
+  ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
       const marked = await transaction.videoTask.updateMany({
         where: {
@@ -290,6 +390,8 @@ export class PrismaTaskStore implements TaskStore {
           providerTaskId: null
         },
         data: {
+          status: TaskStatus.RECONCILIATION_REQUIRED,
+          providerAssetCleanupReadyAt: null,
           errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN",
           errorMessage:
             "Provider create outcome is unknown; automatic resubmission is disabled."
@@ -307,17 +409,161 @@ export class PrismaTaskStore implements TaskStore {
         },
         update: {
           status: ProviderSubmissionStatus.OUTCOME_UNKNOWN,
-          errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN"
+          errorCode: "PROVIDER_CREATE_OUTCOME_UNKNOWN",
+          ...submissionAuditData(audit)
         }
       });
       await transaction.taskEvent.create({
         data: {
           taskId: task.id,
           fromStatus: TaskStatus.SUBMITTING,
-          toStatus: TaskStatus.SUBMITTING,
+          toStatus: TaskStatus.RECONCILIATION_REQUIRED,
           reason: "PROVIDER_CREATE_OUTCOME_UNKNOWN"
         }
       });
+    });
+  }
+
+  async markSubmissionFailed(
+    task: SubmissionTask,
+    now: Date,
+    errorCode: string,
+    audit?: ProviderCreateAudit
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.videoTask.updateMany({
+        where: {
+          id: task.id,
+          status: TaskStatus.SUBMITTING,
+          providerTaskId: null
+        },
+        data: {
+          status: TaskStatus.FAILED,
+          completedAt: now,
+          providerAssetCleanupReadyAt: now,
+          errorCode,
+          errorMessage: "Provider task submission failed."
+        }
+      });
+      if (updated.count !== 1) return;
+      await transaction.providerSubmission.updateMany({
+        where: { taskId: task.id },
+        data: {
+          status: ProviderSubmissionStatus.NOT_CREATED,
+          errorCode,
+          reconciledAt: now,
+          ...submissionAuditData(audit)
+        }
+      });
+      await transaction.taskEvent.create({
+        data: {
+          taskId: task.id,
+          fromStatus: TaskStatus.SUBMITTING,
+          toStatus: TaskStatus.FAILED,
+          reason: errorCode
+        }
+      });
+    });
+  }
+
+  async recordPublishedAsset(
+    taskId: string,
+    assetId: string,
+    remoteObject: PublishedRemoteObject,
+    expiresAt: Date
+  ): Promise<void> {
+    await this.prisma.publishedProviderAsset.upsert({
+      where: {
+        publisher_bucket_objectKey: {
+          publisher: remoteObject.publisher,
+          bucket: remoteObject.bucket,
+          objectKey: remoteObject.objectKey
+        }
+      },
+      create: {
+        taskId,
+        assetId,
+        publisher: remoteObject.publisher,
+        bucket: remoteObject.bucket,
+        objectKey: remoteObject.objectKey,
+        expiresAt
+      },
+      update: {}
+    });
+  }
+
+  async findPublishedAssets(
+    taskId: string
+  ): Promise<readonly PublishedRemoteObject[]> {
+    const records = await this.prisma.publishedProviderAsset.findMany({
+      where: {
+        taskId,
+        deletedAt: null,
+        task: { providerAssetCleanupReadyAt: { not: null } }
+      },
+      select: { publisher: true, bucket: true, objectKey: true }
+    });
+    return records
+      .filter((record) => record.publisher === "eos")
+      .map((record) => ({
+        publisher: "eos" as const,
+        bucket: record.bucket,
+        objectKey: record.objectKey
+      }));
+  }
+
+  async findTerminalTasksWithPublishedAssets(
+    limit: number
+  ): Promise<readonly string[]> {
+    const records = await this.prisma.publishedProviderAsset.findMany({
+      where: {
+        deletedAt: null,
+        task: {
+          providerAssetCleanupReadyAt: { not: null },
+          status: {
+            in: [
+              TaskStatus.SUCCEEDED,
+              TaskStatus.FAILED,
+              TaskStatus.CANCELLED,
+              TaskStatus.EXPIRED
+            ]
+          }
+        }
+      },
+      select: { taskId: true },
+      distinct: ["taskId"],
+      take: limit
+    });
+    return records.map((record) => record.taskId);
+  }
+
+  async markPublishedAssetDeleted(
+    remoteObject: PublishedRemoteObject,
+    deletedAt: Date
+  ): Promise<void> {
+    await this.prisma.publishedProviderAsset.updateMany({
+      where: {
+        publisher: remoteObject.publisher,
+        bucket: remoteObject.bucket,
+        objectKey: remoteObject.objectKey,
+        deletedAt: null
+      },
+      data: { deletedAt, cleanupError: null }
+    });
+  }
+
+  async markPublishedAssetCleanupFailed(
+    remoteObject: PublishedRemoteObject,
+    errorCode: string
+  ): Promise<void> {
+    await this.prisma.publishedProviderAsset.updateMany({
+      where: {
+        publisher: remoteObject.publisher,
+        bucket: remoteObject.bucket,
+        objectKey: remoteObject.objectKey,
+        deletedAt: null
+      },
+      data: { cleanupError: errorCode.slice(0, 128) }
     });
   }
 
@@ -477,7 +723,8 @@ export class PrismaTaskStore implements TaskStore {
           lastProviderStatus: providerStatus ?? null,
           lastPollError: null,
           errorCode,
-          errorMessage
+          errorMessage,
+          providerAssetCleanupReadyAt: now
         }
       });
       if (updated.count !== 1) return false;
@@ -487,6 +734,45 @@ export class PrismaTaskStore implements TaskStore {
           fromStatus: TaskStatus.PROCESSING,
           toStatus: TaskStatus.FAILED,
           reason: errorCode
+        }
+      });
+      return true;
+    });
+  }
+
+  async markProviderStopped(
+    claim: PollClaim,
+    now: Date,
+    status: Extract<TaskStatus, "CANCELLED" | "EXPIRED">,
+    providerStatus?: string
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.videoTask.updateMany({
+        where: pollClaimWhere(claim),
+        data: {
+          status,
+          completedAt: now,
+          pollAttempt: { increment: 1 },
+          nextPollAt: null,
+          lastPolledAt: now,
+          pollLeaseUntil: null,
+          lastProviderStatus: providerStatus ?? null,
+          lastPollError: null,
+          errorCode: null,
+          errorMessage: null,
+          providerAssetCleanupReadyAt: now
+        }
+      });
+      if (updated.count !== 1) return false;
+      await transaction.taskEvent.create({
+        data: {
+          taskId: claim.taskId,
+          fromStatus: TaskStatus.PROCESSING,
+          toStatus: status,
+          reason:
+            status === TaskStatus.CANCELLED
+              ? "PROVIDER_REPORTED_CANCELLED"
+              : "PROVIDER_REPORTED_EXPIRED"
         }
       });
       return true;
@@ -529,8 +815,9 @@ export class PrismaTaskStore implements TaskStore {
       const updated = await transaction.videoTask.updateMany({
         where: pollClaimWhere(claim),
         data: {
-          status: TaskStatus.EXPIRED,
+          status: TaskStatus.RECONCILIATION_REQUIRED,
           completedAt: now,
+          providerAssetCleanupReadyAt: null,
           nextPollAt: null,
           lastPolledAt: now,
           pollLeaseUntil: null,
@@ -545,7 +832,7 @@ export class PrismaTaskStore implements TaskStore {
         data: {
           taskId: claim.taskId,
           fromStatus: TaskStatus.PROCESSING,
-          toStatus: TaskStatus.EXPIRED,
+          toStatus: TaskStatus.RECONCILIATION_REQUIRED,
           reason: "LOCAL_POLL_DEADLINE_EXCEEDED"
         }
       });
@@ -750,6 +1037,7 @@ export class PrismaTaskStore implements TaskStore {
           lastDownloadAt: now,
           lastDownloadError: null,
           completedAt: now,
+          providerAssetCleanupReadyAt: now,
           errorCode: null,
           errorMessage: null
         }
@@ -846,6 +1134,53 @@ export class PrismaTaskStore implements TaskStore {
       return true;
     });
   }
+}
+
+function submissionAuditData(audit?: ProviderCreateAudit): {
+  bridgeRequestId?: string;
+  requestStartedAt?: Date;
+  requestEndedAt?: Date;
+  failureStage?: string;
+  exceptionType?: string;
+  requestBodySent?: boolean;
+  providerHttpStatus?: number;
+  providerErrorCode?: string;
+  providerRequestId?: string;
+  providerTraceId?: string;
+} {
+  if (audit === undefined) return {};
+  return {
+    ...(audit.bridgeRequestId === undefined
+      ? {}
+      : { bridgeRequestId: audit.bridgeRequestId }),
+    ...(audit.requestStartedAt === undefined
+      ? {}
+      : { requestStartedAt: new Date(audit.requestStartedAt) }),
+    ...(audit.requestEndedAt === undefined
+      ? {}
+      : { requestEndedAt: new Date(audit.requestEndedAt) }),
+    ...(audit.failureStage === undefined
+      ? {}
+      : { failureStage: audit.failureStage }),
+    ...(audit.exceptionType === undefined
+      ? {}
+      : { exceptionType: audit.exceptionType }),
+    ...(audit.requestBodySent === undefined
+      ? {}
+      : { requestBodySent: audit.requestBodySent }),
+    ...(audit.providerHttpStatus === undefined
+      ? {}
+      : { providerHttpStatus: audit.providerHttpStatus }),
+    ...(audit.providerErrorCode === undefined
+      ? {}
+      : { providerErrorCode: audit.providerErrorCode }),
+    ...(audit.providerRequestId === undefined
+      ? {}
+      : { providerRequestId: audit.providerRequestId }),
+    ...(audit.providerTraceId === undefined
+      ? {}
+      : { providerTraceId: audit.providerTraceId })
+  };
 }
 
 function pollClaimWhere(claim: PollClaim) {

@@ -11,6 +11,7 @@ enum TaskStatus {
   DRAFT
   QUEUED
   SUBMITTING
+  RECONCILIATION_REQUIRED
   PROCESSING
   SUCCEEDED
   FAILED
@@ -20,11 +21,13 @@ enum TaskStatus {
 
 enum AssetKind {
   INPUT_IMAGE
+  INPUT_VIDEO
   OUTPUT_VIDEO
 }
 
 enum AssetRole {
   REFERENCE_IMAGE
+  REFERENCE_VIDEO
   GENERATED_VIDEO
 }
 
@@ -32,49 +35,52 @@ enum ProviderSubmissionStatus {
   ATTEMPTING
   ACCEPTED
   OUTCOME_UNKNOWN
+  NOT_CREATED
 }
 
 model VideoTask {
-  id                  String              @id @default(cuid())
-  clientRequestId     String              @unique
-  provider            String              @default("mock")
-  providerTaskId      String?
-  model               String
-  status              TaskStatus          @default(QUEUED)
-  prompt              String
-  parameters          Json
-  progress            Int?
-  errorCode           String?
-  errorMessage        String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  submittedAt         DateTime?
-  completedAt         DateTime?
-  pollStartedAt       DateTime?
-  nextPollAt          DateTime?
-  lastPolledAt        DateTime?
-  pollDeadlineAt      DateTime?
-  pollLeaseUntil      DateTime?
-  pollVersion         Int                 @default(0)
-  pollAttempt         Int                 @default(0)
-  pollTransientErrors Int                 @default(0)
-  lastProviderStatus  String?
-  lastPollError       String?
-  downloadPending     Boolean             @default(false)
-  downloadStartedAt   DateTime?
-  nextDownloadAt      DateTime?
-  lastDownloadAt      DateTime?
-  downloadDeadlineAt  DateTime?
-  downloadLeaseUntil  DateTime?
-  downloadVersion     Int                 @default(0)
-  downloadAttempt     Int                 @default(0)
-  downloadErrors      Int                 @default(0)
-  lastDownloadError   String?
-  events              TaskEvent[]
-  assets              TaskAsset[]
-  usageRecords        UsageRecord[]
-  submission          ProviderSubmission?
-  videoOutput         VideoOutput?
+  id                          String                   @id @default(cuid())
+  clientRequestId             String                   @unique
+  provider                    String                   @default("mock")
+  providerTaskId              String?
+  model                       String
+  status                      TaskStatus               @default(QUEUED)
+  prompt                      String
+  parameters                  Json
+  progress                    Int?
+  errorCode                   String?
+  errorMessage                String?
+  createdAt                   DateTime                 @default(now())
+  updatedAt                   DateTime                 @updatedAt
+  submittedAt                 DateTime?
+  completedAt                 DateTime?
+  providerAssetCleanupReadyAt DateTime?                @db.Timestamptz(3)
+  pollStartedAt               DateTime?
+  nextPollAt                  DateTime?
+  lastPolledAt                DateTime?
+  pollDeadlineAt              DateTime?
+  pollLeaseUntil              DateTime?
+  pollVersion                 Int                      @default(0)
+  pollAttempt                 Int                      @default(0)
+  pollTransientErrors         Int                      @default(0)
+  lastProviderStatus          String?
+  lastPollError               String?
+  downloadPending             Boolean                  @default(false)
+  downloadStartedAt           DateTime?
+  nextDownloadAt              DateTime?
+  lastDownloadAt              DateTime?
+  downloadDeadlineAt          DateTime?
+  downloadLeaseUntil          DateTime?
+  downloadVersion             Int                      @default(0)
+  downloadAttempt             Int                      @default(0)
+  downloadErrors              Int                      @default(0)
+  lastDownloadError           String?
+  events                      TaskEvent[]
+  assets                      TaskAsset[]
+  usageRecords                UsageRecord[]
+  submission                  ProviderSubmission?
+  videoOutput                 VideoOutput?
+  publishedAssets             PublishedProviderAsset[]
 
   @@unique([provider, providerTaskId])
   @@index([status, createdAt])
@@ -84,17 +90,31 @@ model VideoTask {
 }
 
 model ProviderSubmission {
-  id              String                   @id @default(cuid())
-  taskId          String                   @unique
-  provider        String
-  clientRequestId String
-  providerTaskId  String?
-  status          ProviderSubmissionStatus @default(ATTEMPTING)
-  errorCode       String?
-  startedAt       DateTime                 @default(now())
-  acceptedAt      DateTime?
-  updatedAt       DateTime                 @updatedAt
-  task            VideoTask                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  id                   String                   @id @default(cuid())
+  taskId               String                   @unique
+  provider             String
+  clientRequestId      String
+  providerTaskId       String?
+  status               ProviderSubmissionStatus @default(ATTEMPTING)
+  errorCode            String?
+  createAttemptId      String?                  @unique
+  requestPayloadSha256 String?
+  bridgeRequestId      String?
+  requestStartedAt     DateTime?                @db.Timestamptz(3)
+  requestEndedAt       DateTime?                @db.Timestamptz(3)
+  failureStage         String?
+  exceptionType        String?
+  requestBodySent      Boolean?
+  providerHttpStatus   Int?
+  providerErrorCode    String?
+  providerRequestId    String?
+  providerTraceId      String?
+  reconciliationNote   String?
+  reconciledAt         DateTime?
+  startedAt            DateTime                 @default(now())
+  acceptedAt           DateTime?
+  updatedAt            DateTime                 @updatedAt
+  task                 VideoTask                @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@unique([provider, clientRequestId])
   @@unique([provider, providerTaskId])
@@ -102,16 +122,42 @@ model ProviderSubmission {
 }
 
 model Asset {
-  id           String       @id @default(cuid())
+  id           String                   @id @default(cuid())
   kind         AssetKind
-  storageKey   String       @unique
+  storageKey   String                   @unique
   originalName String
   mimeType     String
   sizeBytes    BigInt
   checksum     String?
-  createdAt    DateTime     @default(now())
+  durationMs   Int?
+  width        Int?
+  height       Int?
+  codec        String?
+  pixelFormat  String?
+  frameRate    String?
+  hasAudio     Boolean?
+  createdAt    DateTime                 @default(now())
   tasks        TaskAsset[]
   videoOutput  VideoOutput?
+  publications PublishedProviderAsset[]
+}
+
+model PublishedProviderAsset {
+  id           String    @id @default(cuid())
+  taskId       String
+  assetId      String
+  publisher    String
+  bucket       String
+  objectKey    String
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+  cleanupError String?
+  task         VideoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  asset        Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([publisher, bucket, objectKey])
+  @@index([taskId, deletedAt])
 }
 
 model VideoOutput {

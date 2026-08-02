@@ -18,7 +18,9 @@
     "check:client-secrets": "node scripts/check-client-secrets.mjs",
     "db:generate": "pnpm --filter @seedance/db db:generate",
     "db:migrate": "pnpm --filter @seedance/db db:migrate",
-    "db:deploy": "pnpm --filter @seedance/db db:deploy"
+    "db:deploy": "pnpm --filter @seedance/db db:deploy",
+    "eos:verify": "pnpm --filter @seedance/storage verify:eos",
+    "eos:verify-reference-video": "pnpm --filter @seedance/worker verify:reference-video"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

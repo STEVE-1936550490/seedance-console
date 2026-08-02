@@ -14,7 +14,8 @@ const terminalStatuses = new Set([
   "SUCCEEDED",
   "FAILED",
   "CANCELLED",
-  "EXPIRED"
+  "EXPIRED",
+  "RECONCILIATION_REQUIRED"
 ]);
 
 interface UploadedAsset {
@@ -22,6 +23,13 @@ interface UploadedAsset {
   originalName: string;
   mimeType: string;
   sizeBytes: number;
+  kind: "image" | "video";
+  durationSeconds: number | null;
+  width: number | null;
+  height: number | null;
+  codec: string | null;
+  frameRate: string | null;
+  hasAudio: boolean | null;
 }
 
 export default function StudioPage() {
@@ -43,6 +51,12 @@ export default function StudioPage() {
     selectedModel?.parameters.filter((item) => item.group === "primary") ?? [];
   const advancedParameters =
     selectedModel?.parameters.filter((item) => item.group === "advanced") ?? [];
+  const maxReferenceImages = capabilities?.maxReferenceImages ?? 0;
+  const maxReferenceVideos = capabilities?.maxReferenceVideos ?? 0;
+  const acceptedImageTypes =
+    capabilities?.provider === "seedance"
+      ? "image/jpeg,image/png"
+      : "image/jpeg,image/png,image/webp";
 
   const loadTask = useCallback(async (taskId: string) => {
     const response = await fetch(`${apiUrl}/api/tasks/${taskId}`, {
@@ -133,8 +147,17 @@ export default function StudioPage() {
     setUploading(true);
     setFormError(null);
     try {
+      if (maxReferenceImages === 0) {
+        throw new Error("当前 Provider 不支持参考图片。");
+      }
+      if (assets.length + files.length > maxReferenceImages) {
+        throw new Error(`最多只能添加 ${maxReferenceImages} 张参考图片。`);
+      }
       const uploaded: UploadedAsset[] = [];
       for (const file of Array.from(files)) {
+        if (!acceptedImageTypes.split(",").includes(file.type)) {
+          throw new Error(`${file.name} 的图片格式不受当前 Provider 支持。`);
+        }
         const body = new FormData();
         body.append("file", file);
         const response = await fetch(`${apiUrl}/api/assets`, {
@@ -146,9 +169,53 @@ export default function StudioPage() {
         }
         uploaded.push((await response.json()) as UploadedAsset);
       }
-      setAssets((current) => [...current, ...uploaded].slice(0, 8));
+      setAssets((current) =>
+        [...current, ...uploaded].slice(0, maxReferenceImages)
+      );
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "素材上传失败。");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function uploadVideo(files: FileList | null) {
+    const file = files?.[0];
+    if (file === undefined) return;
+    setUploading(true);
+    setFormError(null);
+    try {
+      if (maxReferenceVideos === 0) {
+        throw new Error("当前 Provider 不支持参考视频。");
+      }
+      if (assets.some((asset) => asset.kind === "video")) {
+        throw new Error("当前 MVP 只允许一段参考视频。");
+      }
+      if (capabilities?.provider === "seedance" && assets.length > 0) {
+        throw new Error("当前 Seedance MVP 只允许一项参考图片或视频。");
+      }
+      if (
+        file.type !== "video/mp4" ||
+        !file.name.toLowerCase().endsWith(".mp4")
+      ) {
+        throw new Error("当前 MVP 只接受扩展名与 MIME 均为 MP4 的视频。");
+      }
+      const body = new FormData();
+      body.append("file", file);
+      const response = await fetch(`${apiUrl}/api/assets`, {
+        method: "POST",
+        body
+      });
+      const result = (await response.json()) as
+        UploadedAsset | { error: string };
+      if (!response.ok || !("id" in result)) {
+        throw new Error(
+          `视频上传失败：${"error" in result ? result.error : "UNKNOWN"}`
+        );
+      }
+      setAssets((current) => [...current, result]);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "视频上传失败。");
     } finally {
       setUploading(false);
     }
@@ -173,9 +240,14 @@ export default function StudioPage() {
           parameters
         })
       });
-      const body = (await response.json()) as TaskDto | { error: string };
+      const body = (await response.json()) as
+        TaskDto | { error: string; message?: string };
       if (!response.ok || !("id" in body)) {
-        throw new Error("任务创建失败，请检查参数和本地服务。");
+        throw new Error(
+          "message" in body && body.message !== undefined
+            ? body.message
+            : `任务创建失败：${"error" in body ? body.error : "UNKNOWN"}`
+        );
       }
       window.localStorage.setItem("seedance:lastTaskId", body.id);
       setTask(body);
@@ -194,8 +266,8 @@ export default function StudioPage() {
           <h1>从想法到画面</h1>
         </div>
         <p>
-          当前使用可重复验证的 Mock Provider。全部任务请求由后端处理，
-          页面不会连接模型服务。
+          当前使用 {capabilities?.label ?? "后端 Provider"}
+          。全部任务请求由后端处理， 页面不会直接连接模型服务。
         </p>
       </section>
 
@@ -240,19 +312,52 @@ export default function StudioPage() {
             <label className="uploadZone">
               <input
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
+                accept={acceptedImageTypes}
+                multiple={maxReferenceImages > 1}
+                disabled={
+                  uploading ||
+                  maxReferenceImages === 0 ||
+                  assets.length >= maxReferenceImages
+                }
                 onChange={(event) => void uploadImages(event.target.files)}
               />
               <span className="uploadIcon">＋</span>
               <strong>{uploading ? "正在上传…" : "添加参考图片"}</strong>
-              <small>JPG、PNG、WebP，单文件最大 10MB</small>
+              <small>
+                {capabilities?.provider === "seedance"
+                  ? "JPG 或 PNG"
+                  : "JPG、PNG 或 WebP"}
+                ，最多 {maxReferenceImages} 张，单文件最大 10MB
+              </small>
             </label>
+            {maxReferenceVideos > 0 && (
+              <label className="uploadZone">
+                <input
+                  type="file"
+                  accept="video/mp4,.mp4"
+                  disabled={
+                    uploading ||
+                    assets.some((asset) => asset.kind === "video") ||
+                    (capabilities?.provider === "seedance" && assets.length > 0)
+                  }
+                  onChange={(event) => void uploadVideo(event.target.files)}
+                />
+                <span className="uploadIcon">▶</span>
+                <strong>{uploading ? "正在检查…" : "添加参考视频"}</strong>
+                <small>MP4，2–15 秒；大小受本地上传安全策略限制</small>
+              </label>
+            )}
             {assets.length > 0 && (
               <div className="assetList">
                 {assets.map((asset) => (
                   <div className="assetChip" key={asset.id}>
-                    <span>{asset.originalName}</span>
+                    <span>
+                      {asset.kind === "video" ? "视频 · " : "图片 · "}
+                      {asset.originalName}
+                      {asset.durationSeconds === null
+                        ? ""
+                        : ` · ${asset.durationSeconds.toFixed(2)} 秒`}
+                    </span>
                     <button
                       type="button"
                       aria-label={`移除 ${asset.originalName}`}
@@ -426,7 +531,7 @@ function TaskResult({
     );
   }
 
-  if (task.status === "FAILED") {
+  if (task.status === "FAILED" || task.status === "RECONCILIATION_REQUIRED") {
     return (
       <div className="taskState stateFailed">
         <StatusHeader task={task} elapsed={elapsed} />
@@ -523,6 +628,7 @@ function statusLabel(status: TaskDto["status"]): string {
     DRAFT: "草稿",
     QUEUED: "排队中",
     SUBMITTING: "正在提交",
+    RECONCILIATION_REQUIRED: "需要人工对账",
     PROCESSING: "生成中",
     SUCCEEDED: "已完成",
     FAILED: "失败",
@@ -535,6 +641,8 @@ function statusLabel(status: TaskDto["status"]): string {
 function workingMessage(status: TaskDto["status"]): string {
   if (status === "QUEUED") return "任务正在等待 Worker";
   if (status === "SUBMITTING") return "正在提交到 Mock Provider";
+  if (status === "RECONCILIATION_REQUIRED")
+    return "已停止自动提交，等待人工对账";
   return "Mock Provider 正在生成视频";
 }
 

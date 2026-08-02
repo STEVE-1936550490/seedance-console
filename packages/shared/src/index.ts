@@ -20,6 +20,7 @@ export type TaskStatus =
   | "DRAFT"
   | "QUEUED"
   | "SUBMITTING"
+  | "RECONCILIATION_REQUIRED"
   | "PROCESSING"
   | "SUCCEEDED"
   | "FAILED"
@@ -51,6 +52,14 @@ export interface TaskDto {
     id: string;
     originalName: string;
     mimeType: string;
+    kind: "image" | "video";
+    sizeBytes: number;
+    durationSeconds: number | null;
+    width: number | null;
+    height: number | null;
+    codec: string | null;
+    frameRate: string | null;
+    hasAudio: boolean | null;
   }[];
   usage: readonly UsageDto[];
   hasVideo: boolean;

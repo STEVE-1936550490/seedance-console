@@ -19,6 +19,7 @@ API、Worker、PostgreSQL 和 Redis 默认只绑定宿主机回环地址。
 - Web 默认使用 TCP `43170`。API `43171`、Worker `43172`、PostgreSQL `45432` 和 Redis `46379` 只绑定 `127.0.0.1`。
 
 Docker 部署不要求宿主机安装 Node.js 或 pnpm。只有本地源码开发和质量检查才需要 Node.js 22、Corepack 和 pnpm 10.15.0。
+API 与 Worker 镜像包含 ffprobe，用于单参考 MP4 的容器和媒体元数据检查。
 
 检查安装：
 
@@ -190,7 +191,37 @@ docker volume inspect seedance-console_app-storage
 
 不要把这些目录、数据库导出、上传文件或生成视频复制进 Git 工作树。正式备份与恢复方案属于后续运维加固阶段。
 
-## 9. 常见故障排查
+## 9. 真实参考图片的 EOS 边界
+
+参考图片使用私有、S3 兼容的移动云 EOS Bucket，不依赖服务器公网 80/443、Caddy 或
+DuckDNS。Bucket 不得开放匿名读写；Worker 的凭证应只允许指定前缀的 Put/Get/Delete。
+
+生产配置：
+
+```dotenv
+ASSET_PUBLISHER=eos
+EOS_ENDPOINT=https://<EOS 控制台提供>
+EOS_REGION=<EOS 控制台提供>
+EOS_BUCKET=<私有 Bucket>
+EOS_ACCESS_KEY_ID=<服务器 secret>
+EOS_SECRET_ACCESS_KEY=<服务器 secret>
+EOS_OBJECT_PREFIX=seedance-inputs/
+EOS_PRESIGN_TTL_SECONDS=3600
+EOS_FORCE_PATH_STYLE=false
+EOS_DELETE_ON_TERMINAL=true
+SEEDANCE_ASSET_MAX_BYTES=10485760
+```
+
+Endpoint、Region 和 `EOS_FORCE_PATH_STYLE` 必须以当前租户的官方信息为准。AccessKey、
+SecretKey 不得写入 Compose 文件、Git、日志或 `NEXT_PUBLIC_*`。切换真实 Provider 前先
+运行 `pnpm eos:verify`；它会上传 fixture、生成 5 分钟 URL、GET 校验并删除对象。
+
+HMAC 端点仍作为回滚方案保留。回滚时设置 `ASSET_PUBLISHER=hmac` 并恢复
+`SEEDANCE_ASSET_SIGNING_KEY`、`SEEDANCE_ASSET_PUBLIC_BASE_URL` 和
+`SEEDANCE_ASSET_URL_TTL_MS`，然后重启 API/Worker；不要回滚或删除已应用的数据库表。
+完整生命周期和清理说明见 [Provider 参考图片安全发布](ASSET_PUBLISHING.md)。
+
+## 10. 常见故障排查
 
 ### Docker socket 权限不足
 

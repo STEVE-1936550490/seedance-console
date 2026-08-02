@@ -22,17 +22,75 @@ describe("SeedanceProviderDefinition", () => {
       provider: "seedance",
       testOnly: false,
       supportsCancellation: false,
+      supportsReferenceImage: true,
+      maxReferenceImages: 1,
+      supportsReferenceVideo: true,
+      maxReferenceVideos: 1,
       models: [
         {
           id: "fixture-model",
           parameters: [
             { key: "ratio", defaultValue: "16:9" },
             { key: "duration", defaultValue: 11 },
-            { key: "generateAudio", defaultValue: true },
+            { key: "generateAudio", defaultValue: false },
             { key: "watermark", defaultValue: false }
           ]
         }
       ]
+    });
+  });
+
+  it("maps one validated reference video to the audited AICC shape", async () => {
+    const transport = createTransport();
+    const adapter = createAdapter(transport);
+    await adapter.createTask({
+      clientRequestId: "fixture-video-request",
+      model: "fixture-model",
+      prompt: "全程参考视频1的运镜",
+      referenceAssetIds: ["video-1"],
+      publishedAssets: [
+        {
+          assetId: "video-1",
+          role: "REFERENCE_VIDEO",
+          position: 0,
+          mimeType: "video/mp4",
+          sizeBytes: 7_309_809,
+          checksum: "b".repeat(64),
+          url: "https://objects.invalid/video.mp4?signature=redacted",
+          expiresAt: new Date(Date.now() + 60_000),
+          metadata: {
+            container: "mp4",
+            durationSeconds: 11.041667,
+            width: 1280,
+            height: 720,
+            codec: "h264",
+            pixelFormat: "yuv420p",
+            frameRate: "24/1",
+            hasAudio: false
+          }
+        }
+      ],
+      parameters: validParameters()
+    });
+    expect(transport.createTask).toHaveBeenCalledWith({
+      clientRequestId: "fixture-video-request",
+      model: "fixture-model",
+      request: {
+        content: [
+          { type: "text", text: "全程参考视频1的运镜" },
+          {
+            type: "video_url",
+            video_url: {
+              url: "https://objects.invalid/video.mp4?signature=redacted"
+            },
+            role: "reference_video"
+          }
+        ],
+        generate_audio: false,
+        ratio: "16:9",
+        duration: 11,
+        watermark: false
+      }
     });
   });
 
@@ -74,7 +132,9 @@ describe("SeedanceProviderAdapter skeleton", () => {
           position: 0,
           mimeType: "image/jpeg",
           sizeBytes: 100,
-          url: "https://assets.invalid/fixture.jpg?token=redacted"
+          checksum: "a".repeat(64),
+          url: "https://assets.invalid/fixture.jpg?token=redacted",
+          expiresAt: new Date(Date.now() + 60_000)
         }
       ],
       parameters: validParameters()
@@ -94,7 +154,7 @@ describe("SeedanceProviderAdapter skeleton", () => {
             role: "reference_image"
           }
         ],
-        generate_audio: true,
+        generate_audio: false,
         ratio: "16:9",
         duration: 11,
         watermark: false
@@ -116,6 +176,48 @@ describe("SeedanceProviderAdapter skeleton", () => {
         model: "fixture-model",
         prompt: "fixture prompt",
         referenceAssetIds: ["asset-1"],
+        parameters: validParameters()
+      })
+    ).rejects.toBeInstanceOf(ProviderValidationError);
+  });
+
+  it("rejects expired, unsupported, or multiple reference images", async () => {
+    const adapter = createAdapter(createTransport());
+    const base = {
+      assetId: "asset-1",
+      role: "REFERENCE_IMAGE" as const,
+      position: 0,
+      mimeType: "image/png",
+      sizeBytes: 100,
+      checksum: "a".repeat(64),
+      url: "https://assets.invalid/image.png",
+      expiresAt: new Date(Date.now() - 1)
+    };
+    await expect(
+      adapter.createTask({
+        clientRequestId: "fixture-request-id",
+        model: "fixture-model",
+        prompt: "fixture prompt",
+        referenceAssetIds: ["asset-1"],
+        publishedAssets: [base],
+        parameters: validParameters()
+      })
+    ).rejects.toBeInstanceOf(ProviderValidationError);
+    await expect(
+      adapter.createTask({
+        clientRequestId: "fixture-request-id",
+        model: "fixture-model",
+        prompt: "fixture prompt",
+        referenceAssetIds: ["asset-1", "asset-2"],
+        publishedAssets: [
+          { ...base, expiresAt: new Date(Date.now() + 60_000) },
+          {
+            ...base,
+            assetId: "asset-2",
+            position: 1,
+            expiresAt: new Date(Date.now() + 60_000)
+          }
+        ],
         parameters: validParameters()
       })
     ).rejects.toBeInstanceOf(ProviderValidationError);
@@ -184,7 +286,7 @@ function validParameters() {
   return {
     ratio: "16:9" as const,
     duration: 11 as const,
-    generateAudio: true as const,
+    generateAudio: false,
     watermark: false as const
   };
 }

@@ -127,6 +127,7 @@ function statusLabel(status: TaskDto["status"]): string {
     DRAFT: "草稿",
     QUEUED: "排队中",
     SUBMITTING: "提交中",
+    RECONCILIATION_REQUIRED: "需要人工对账",
     PROCESSING: "生成中",
     SUCCEEDED: "已完成",
     FAILED: "失败",

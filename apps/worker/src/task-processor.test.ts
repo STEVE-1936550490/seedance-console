@@ -5,17 +5,22 @@ import { describe, expect, it } from "vitest";
 
 import {
   ProviderAuthenticationError,
+  ProviderCreateNotSentError,
   ProviderOutcomeUnknownError,
   ProviderProtocolError,
   ProviderRateLimitError,
+  ProviderRequestError,
   ProviderTransientError,
+  type CreateTaskInput,
   type ProviderCapabilities,
+  type ProviderCreateAudit,
   type ProviderDownload,
   type ProviderTaskSnapshot,
   type ProviderUsage,
   type SeedanceProvider,
   type ValidationResult
 } from "@seedance/seedance-provider";
+import type { AssetPublisher, PublishedRemoteObject } from "@seedance/storage";
 
 import type { ProviderJobScheduler } from "./job-scheduler.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
@@ -30,6 +35,7 @@ import type {
   TaskStore
 } from "./task-store.js";
 import {
+  cleanupPublishedAssets,
   createPollProcessor,
   createSubmitProcessor,
   type PollingPolicy
@@ -65,6 +71,306 @@ describe("split Provider submit and poll processing", () => {
     expect(harness.scheduler.downloads).toEqual([]);
   });
 
+  it("publishes a reference image in memory before a Seedance create", async () => {
+    const publishedAt = new Date(baseTime.getTime() + 120_000);
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_IMAGE",
+        mimeType: "image/png",
+        sizeBytes: 128,
+        checksum: "a".repeat(64),
+        url: "https://assets.example.com/api/provider-assets/asset-one?signed=redacted",
+        expiresAt: publishedAt
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("Not used by the Worker.");
+      }
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["asset-one"];
+
+    await harness.submit("task-1");
+
+    expect(harness.provider.lastCreateInput?.publishedAssets).toEqual([
+      {
+        assetId: "asset-one",
+        role: "REFERENCE_IMAGE",
+        position: 0,
+        mimeType: "image/png",
+        sizeBytes: 128,
+        checksum: "a".repeat(64),
+        url: "https://assets.example.com/api/provider-assets/asset-one?signed=redacted",
+        expiresAt: publishedAt
+      }
+    ]);
+  });
+
+  it("publishes one reference video with the audited purpose before create", async () => {
+    const purposes: string[] = [];
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => {
+        purposes.push(input.purpose);
+        return {
+          assetId: input.assetId,
+          role: "REFERENCE_VIDEO",
+          mimeType: "video/mp4",
+          sizeBytes: 7_309_809,
+          checksum: "b".repeat(64),
+          url: "https://objects.example.com/video.mp4?signature=redacted",
+          expiresAt: new Date(baseTime.getTime() + 120_000),
+          metadata: {
+            container: "mp4",
+            durationSeconds: 11.041667,
+            width: 1280,
+            height: 720,
+            codec: "h264",
+            pixelFormat: "yuv420p",
+            frameRate: "24/1",
+            hasAudio: false
+          }
+        };
+      },
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      }
+    };
+    const harness = createHarness({ providerName: "seedance", assetPublisher });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+    await harness.submit("task-1");
+
+    expect(purposes).toEqual(["reference-video"]);
+    expect(
+      harness.provider.lastCreateInput?.publishedAssets?.[0]
+    ).toMatchObject({
+      role: "REFERENCE_VIDEO",
+      mimeType: "video/mp4",
+      metadata: { durationSeconds: 11.041667 }
+    });
+  });
+
+  it("does not call the Provider when object upload fails", async () => {
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async () => {
+        throw new Error("fixture upload failure");
+      },
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      }
+    };
+    const harness = createHarness({ providerName: "seedance", assetPublisher });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["asset-one"];
+
+    await harness.submit("task-1");
+
+    expect(harness.provider.createCalls).toBe(0);
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+  });
+
+  it("cleans up an object when Provider create fails", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const remoteObject: PublishedRemoteObject = {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: "seedance-inputs/redacted-object"
+    };
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_IMAGE",
+        mimeType: "image/png",
+        sizeBytes: 128,
+        checksum: "a".repeat(64),
+        url: "https://objects.example.com/private?signature=redacted",
+        expiresAt: new Date(baseTime.getTime() + 120_000),
+        remoteObject
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async (value) => {
+        deleted.push(value);
+      }
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      createError: new ProviderRequestError("CREATE", 400)
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["asset-one"];
+
+    await harness.submit("task-1");
+
+    expect(deleted).toContainEqual(remoteObject);
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+  });
+
+  it("cleans up a bound object after a Provider terminal failure", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const remoteObject: PublishedRemoteObject = {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: "seedance-inputs/redacted-object"
+    };
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_IMAGE",
+        mimeType: "image/png",
+        sizeBytes: 128,
+        checksum: "a".repeat(64),
+        url: "https://objects.example.com/private?signature=redacted",
+        expiresAt: new Date(baseTime.getTime() + 120_000),
+        remoteObject
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async (value) => {
+        deleted.push(value);
+      }
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      snapshots: [failedSnapshot()]
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["asset-one"];
+    await harness.submit("task-1");
+    await runCurrentPoll(harness);
+
+    expect(deleted).toContainEqual(remoteObject);
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+  });
+
+  it("cleans up bound objects after Provider cancelled or expired results", async () => {
+    for (const status of ["CANCELLED", "EXPIRED"] as const) {
+      const deleted: PublishedRemoteObject[] = [];
+      const remoteObject: PublishedRemoteObject = {
+        publisher: "eos",
+        bucket: "private-bucket",
+        objectKey: `seedance-inputs/redacted-${status.toLowerCase()}-object`
+      };
+      const assetPublisher: AssetPublisher = {
+        publishForProvider: async (input) => ({
+          assetId: input.assetId,
+          role: "REFERENCE_VIDEO",
+          mimeType: "video/mp4",
+          sizeBytes: 7_309_809,
+          checksum: "b".repeat(64),
+          url: "https://objects.example.com/video.mp4?signature=redacted",
+          expiresAt: new Date(baseTime.getTime() + 120_000),
+          remoteObject,
+          metadata: {
+            container: "mp4",
+            durationSeconds: 11.041667,
+            width: 1280,
+            height: 720,
+            codec: "h264",
+            pixelFormat: "yuv420p",
+            frameRate: "24/1",
+            hasAudio: false
+          }
+        }),
+        authorizeProviderAsset: async () => {
+          throw new Error("not used");
+        },
+        deletePublishedAsset: async (value) => {
+          deleted.push(value);
+        }
+      };
+      const snapshot: ProviderTaskSnapshot = {
+        providerTaskId: "provider-task-1",
+        status,
+        outputs: [],
+        usage: []
+      };
+      const harness = createHarness({
+        providerName: "seedance",
+        assetPublisher,
+        snapshots: [snapshot]
+      });
+      harness.store.task.provider = "seedance";
+      harness.store.task.referenceAssetIds = ["video-one"];
+      harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+      await harness.submit("task-1");
+      await runCurrentPoll(harness);
+
+      expect(deleted).toContainEqual(remoteObject);
+      expect(harness.store.task.nextPollAt).toBeNull();
+    }
+  });
+
+  it("keeps the terminal task result when object cleanup fails", async () => {
+    const remoteObject: PublishedRemoteObject = {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: "seedance-inputs/redacted-object"
+    };
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_IMAGE",
+        mimeType: "image/png",
+        sizeBytes: 128,
+        checksum: "a".repeat(64),
+        url: "https://objects.example.com/private?signature=redacted",
+        expiresAt: new Date(baseTime.getTime() + 120_000),
+        remoteObject
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async () => {
+        throw new Error("secret vendor details must not be persisted");
+      }
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      snapshots: [failedSnapshot()]
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["asset-one"];
+    await harness.submit("task-1");
+    await runCurrentPoll(harness);
+
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+    expect(harness.store.cleanupErrors).toEqual(["OBJECT_DELETE_FAILED"]);
+    expect(harness.store.cleanupErrors.join(" ")).not.toContain(
+      "secret vendor details"
+    );
+  });
+
+  it("does not invoke an EOS publisher in mock mode", async () => {
+    let publishes = 0;
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async () => {
+        publishes += 1;
+        throw new Error("must not run");
+      },
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      }
+    };
+    const harness = createHarness({ assetPublisher });
+    harness.store.task.referenceAssetIds = ["asset-one"];
+    await harness.submit("task-1");
+    expect(publishes).toBe(0);
+    expect(harness.provider.createCalls).toBe(1);
+  });
+
   it("allows only one concurrent submit job to create a Provider task", async () => {
     const harness = createHarness();
 
@@ -87,7 +393,7 @@ describe("split Provider submit and poll processing", () => {
     expect(harness.scheduler.polls).toHaveLength(1);
   });
 
-  it("keeps an unknown create outcome submitting without retrying", async () => {
+  it("moves an unknown create outcome to reconciliation without retrying", async () => {
     const harness = createHarness({
       createError: new ProviderOutcomeUnknownError()
     });
@@ -96,11 +402,176 @@ describe("split Provider submit and poll processing", () => {
 
     expect(harness.provider.createCalls).toBe(1);
     expect(harness.provider.recoverCalls).toBe(1);
-    expect(harness.store.task.status).toBe(TaskStatus.SUBMITTING);
+    expect(harness.store.task.status).toBe(TaskStatus.RECONCILIATION_REQUIRED);
     expect(harness.store.task.errorCode).toBe(
       "PROVIDER_CREATE_OUTCOME_UNKNOWN"
     );
     expect(harness.scheduler.polls).toEqual([]);
+  });
+
+  it("retains the EOS object and audit after a read timeout", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const remoteObject: PublishedRemoteObject = {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: `seedance-inputs/videos/${"a".repeat(64)}`
+    };
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_VIDEO",
+        mimeType: "video/mp4",
+        sizeBytes: 128,
+        checksum: "b".repeat(64),
+        url: "https://objects.example.com/video.mp4?signature=redacted",
+        expiresAt: new Date(baseTime.getTime() + 120_000),
+        remoteObject
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async (object) => {
+        deleted.push(object);
+      }
+    };
+    const audit: ProviderCreateAudit = {
+      bridgeRequestId: "bridge-request-1",
+      failureStage: "READ_RESPONSE",
+      exceptionType: "ReadTimeout",
+      requestBodySent: true,
+      providerRequestId: "provider-request-1"
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      createError: new ProviderOutcomeUnknownError(undefined, audit)
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+    await harness.submit("task-1");
+
+    expect(harness.provider.createCalls).toBe(1);
+    expect(harness.store.task.status).toBe(TaskStatus.RECONCILIATION_REQUIRED);
+    expect(deleted).toEqual([]);
+    expect(harness.store.publishedAssets).toEqual([remoteObject]);
+    expect(harness.store.outcomeAudit).toEqual(audit);
+  });
+
+  it("cleans EOS after a confirmed not-sent create failure", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const remoteObject: PublishedRemoteObject = {
+      publisher: "eos",
+      bucket: "private-bucket",
+      objectKey: `seedance-inputs/videos/${"c".repeat(64)}`
+    };
+    const assetPublisher: AssetPublisher = {
+      publishForProvider: async (input) => ({
+        assetId: input.assetId,
+        role: "REFERENCE_VIDEO",
+        mimeType: "video/mp4",
+        sizeBytes: 128,
+        checksum: "d".repeat(64),
+        url: "https://objects.example.com/video.mp4?signature=redacted",
+        expiresAt: new Date(baseTime.getTime() + 120_000),
+        remoteObject
+      }),
+      authorizeProviderAsset: async () => {
+        throw new Error("not used");
+      },
+      deletePublishedAsset: async (object) => {
+        deleted.push(object);
+      }
+    };
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      createError: new ProviderCreateNotSentError()
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+    await harness.submit("task-1");
+
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+    expect(deleted).toEqual([remoteObject]);
+  });
+
+  it("keeps EOS after create acceptance while the first poll is pending", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const assetPublisher = referenceVideoPublisher(deleted);
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+    await harness.submit("task-1");
+    await cleanupPublishedAssets(
+      { store: harness.store, assetPublisher },
+      "task-1"
+    );
+
+    expect(harness.store.task.status).toBe(TaskStatus.PROCESSING);
+    expect(harness.store.task.providerTaskId).toBe("provider-task-1");
+    expect(deleted).toEqual([]);
+    expect(harness.store.publishedAssets).toHaveLength(1);
+  });
+
+  it("recovers an accepted create after local response parsing fails without cleanup", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const assetPublisher = referenceVideoPublisher(deleted);
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher,
+      createError: new ProviderProtocolError(
+        "CREATE",
+        "Bridge response timestamp is invalid."
+      ),
+      recoveredId: "provider-task-recovered"
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+
+    await harness.submit("task-1");
+
+    expect(harness.provider.createCalls).toBe(1);
+    expect(harness.provider.recoverCalls).toBe(1);
+    expect(harness.store.task.status).toBe(TaskStatus.PROCESSING);
+    expect(harness.store.task.providerTaskId).toBe("provider-task-recovered");
+    expect(deleted).toEqual([]);
+  });
+
+  it("makes repeated concurrent EOS cleanup idempotent", async () => {
+    const deleted: PublishedRemoteObject[] = [];
+    const assetPublisher = referenceVideoPublisher(deleted);
+    const harness = createHarness({
+      providerName: "seedance",
+      assetPublisher
+    });
+    harness.store.task.provider = "seedance";
+    harness.store.task.referenceAssetIds = ["video-one"];
+    harness.store.task.referenceAssetRoles = ["REFERENCE_VIDEO"];
+    await harness.submit("task-1");
+    harness.store.task.status = TaskStatus.FAILED;
+    harness.store.task.cleanupReady = true;
+
+    await Promise.all([
+      cleanupPublishedAssets(
+        { store: harness.store, assetPublisher },
+        "task-1"
+      ),
+      cleanupPublishedAssets({ store: harness.store, assetPublisher }, "task-1")
+    ]);
+
+    expect(harness.store.task.status).toBe(TaskStatus.FAILED);
+    expect(harness.store.publishedAssets).toEqual([]);
+    expect(deleted.length).toBeGreaterThanOrEqual(1);
   });
 
   it("retries only persistence after Provider acceptance", async () => {
@@ -288,7 +759,7 @@ describe("split Provider submit and poll processing", () => {
     await runCurrentPoll(harness);
 
     expect(harness.provider.getCalls).toBe(0);
-    expect(harness.store.task.status).toBe(TaskStatus.EXPIRED);
+    expect(harness.store.task.status).toBe(TaskStatus.RECONCILIATION_REQUIRED);
     expect(harness.store.task.lastPollError).toBe(
       "LOCAL_POLL_DEADLINE_EXCEEDED"
     );
@@ -352,6 +823,8 @@ function createHarness(
     recoveredId?: string;
     createError?: Error;
     failAcceptanceOnce?: boolean;
+    providerName?: "mock" | "seedance";
+    assetPublisher?: AssetPublisher;
   } = {}
 ) {
   let currentTime = baseTime;
@@ -362,7 +835,8 @@ function createHarness(
     options.snapshots ?? [],
     options.beforeSnapshotReturn,
     options.recoveredId,
-    options.createError
+    options.createError,
+    options.providerName
   );
   const clock = () => new Date(currentTime);
   const dependencies = {
@@ -371,7 +845,10 @@ function createHarness(
     scheduler,
     policy,
     now: clock,
-    random: () => 0.5
+    random: () => 0.5,
+    ...(options.assetPublisher === undefined
+      ? {}
+      : { assetPublisher: options.assetPublisher })
   };
   return {
     store,
@@ -389,6 +866,34 @@ function createHarness(
       batchSize: 10,
       now: clock
     })
+  };
+}
+
+function referenceVideoPublisher(
+  deleted: PublishedRemoteObject[]
+): AssetPublisher {
+  const remoteObject: PublishedRemoteObject = {
+    publisher: "eos",
+    bucket: "private-bucket",
+    objectKey: `seedance-inputs/videos/${"f".repeat(64)}`
+  };
+  return {
+    publishForProvider: async (input) => ({
+      assetId: input.assetId,
+      role: "REFERENCE_VIDEO",
+      mimeType: "video/mp4",
+      sizeBytes: 128,
+      checksum: "e".repeat(64),
+      url: "https://objects.example.com/video.mp4?signature=redacted",
+      expiresAt: new Date(baseTime.getTime() + 120_000),
+      remoteObject
+    }),
+    authorizeProviderAsset: async () => {
+      throw new Error("not used");
+    },
+    deletePublishedAsset: async (object) => {
+      deleted.push(object);
+    }
   };
 }
 
@@ -452,10 +957,14 @@ type MemoryTask = SubmissionTask & {
   nextDownloadAt: Date | null;
   downloadDeadlineAt: Date | null;
   errorCode: string | null;
+  cleanupReady: boolean;
 };
 
 class MemoryTaskStore implements TaskStore {
   failAcceptanceOnce = false;
+  readonly publishedAssets: PublishedRemoteObject[] = [];
+  readonly cleanupErrors: string[] = [];
+  outcomeAudit?: ProviderCreateAudit;
   readonly task: MemoryTask = {
     id: "task-1",
     provider: "mock",
@@ -487,7 +996,8 @@ class MemoryTaskStore implements TaskStore {
     downloadVersion: 0,
     nextDownloadAt: null,
     downloadDeadlineAt: null,
-    errorCode: null
+    errorCode: null,
+    cleanupReady: false
   };
 
   async loadSubmissionTask(taskId: string): Promise<SubmissionTask | null> {
@@ -505,6 +1015,10 @@ class MemoryTaskStore implements TaskStore {
     this.task.status = TaskStatus.SUBMITTING;
     return true;
   }
+
+  async recordSubmissionAttempt(): Promise<void> {}
+
+  async recordSubmissionResultAudit(): Promise<void> {}
 
   async acceptSubmission(
     task: SubmissionTask,
@@ -531,13 +1045,71 @@ class MemoryTaskStore implements TaskStore {
       pollDeadlineAt: schedule.pollDeadlineAt,
       pollVersion: schedule.pollVersion,
       pollAttempt: 0,
-      pollTransientErrors: 0
+      pollTransientErrors: 0,
+      cleanupReady: false
     });
     return true;
   }
 
-  async markSubmissionOutcomeUnknown(): Promise<void> {
+  async markSubmissionOutcomeUnknown(
+    _task: SubmissionTask,
+    audit?: ProviderCreateAudit
+  ): Promise<void> {
+    this.task.status = TaskStatus.RECONCILIATION_REQUIRED;
     this.task.errorCode = "PROVIDER_CREATE_OUTCOME_UNKNOWN";
+    this.task.cleanupReady = false;
+    this.outcomeAudit = audit;
+  }
+
+  async markSubmissionFailed(
+    _task: SubmissionTask,
+    _now: Date,
+    errorCode: string
+  ): Promise<void> {
+    this.task.status = TaskStatus.FAILED;
+    this.task.errorCode = errorCode;
+    this.task.cleanupReady = true;
+  }
+
+  async recordPublishedAsset(
+    _taskId: string,
+    _assetId: string,
+    remoteObject: PublishedRemoteObject
+  ): Promise<void> {
+    this.publishedAssets.push(remoteObject);
+  }
+
+  async findPublishedAssets(): Promise<readonly PublishedRemoteObject[]> {
+    return this.task.cleanupReady ? [...this.publishedAssets] : [];
+  }
+
+  async findTerminalTasksWithPublishedAssets(): Promise<readonly string[]> {
+    return this.task.cleanupReady &&
+      this.publishedAssets.length > 0 &&
+      [
+        TaskStatus.SUCCEEDED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+        TaskStatus.EXPIRED
+      ].includes(this.task.status)
+      ? [this.task.id]
+      : [];
+  }
+
+  async markPublishedAssetDeleted(
+    remoteObject: PublishedRemoteObject
+  ): Promise<void> {
+    const index = this.publishedAssets.findIndex(
+      (value) => value.objectKey === remoteObject.objectKey
+    );
+    if (index >= 0) this.publishedAssets.splice(index, 1);
+  }
+
+  async markPublishedAssetCleanupFailed(
+    _remoteObject: PublishedRemoteObject,
+    errorCode: string
+  ): Promise<void> {
+    this.cleanupErrors.push(errorCode);
   }
 
   async claimPoll(
@@ -632,7 +1204,27 @@ class MemoryTaskStore implements TaskStore {
       lastPolledAt: now,
       pollLeaseUntil: null,
       lastProviderStatus: providerStatus ?? null,
-      errorCode
+      errorCode,
+      cleanupReady: true
+    });
+    return true;
+  }
+
+  async markProviderStopped(
+    claim: PollClaim,
+    now: Date,
+    status: Extract<TaskStatus, "CANCELLED" | "EXPIRED">,
+    providerStatus?: string
+  ): Promise<boolean> {
+    if (!this.isCurrentClaim(claim)) return false;
+    Object.assign(this.task, {
+      status,
+      nextPollAt: null,
+      lastPolledAt: now,
+      pollLeaseUntil: null,
+      lastProviderStatus: providerStatus ?? null,
+      errorCode: null,
+      cleanupReady: true
     });
     return true;
   }
@@ -655,11 +1247,12 @@ class MemoryTaskStore implements TaskStore {
   async expireLocalPoll(claim: PollClaim): Promise<boolean> {
     if (!this.isCurrentClaim(claim)) return false;
     Object.assign(this.task, {
-      status: TaskStatus.EXPIRED,
+      status: TaskStatus.RECONCILIATION_REQUIRED,
       nextPollAt: null,
       pollLeaseUntil: null,
       lastPollError: "LOCAL_POLL_DEADLINE_EXCEEDED",
-      errorCode: "LOCAL_POLL_DEADLINE_EXCEEDED"
+      errorCode: "LOCAL_POLL_DEADLINE_EXCEEDED",
+      cleanupReady: false
     });
     return true;
   }
@@ -770,28 +1363,33 @@ class MemoryScheduler implements ProviderJobScheduler {
 }
 
 class ScriptedProvider implements SeedanceProvider {
-  readonly name = "mock" as const;
+  readonly name: "mock" | "seedance";
   createCalls = 0;
   getCalls = 0;
   recoverCalls = 0;
   private readonly snapshots: Array<ProviderTaskSnapshot | Error>;
   private createdTaskId: string | undefined;
+  lastCreateInput: CreateTaskInput | undefined;
 
   constructor(
     snapshots: Array<ProviderTaskSnapshot | Error>,
     private readonly beforeSnapshotReturn?: () => void,
     private readonly recoveredId?: string,
-    private readonly createError?: Error
+    private readonly createError?: Error,
+    name: "mock" | "seedance" = "mock"
   ) {
     this.snapshots = [...snapshots];
+    this.name = name;
   }
 
   async getCapabilities(): Promise<ProviderCapabilities> {
     return {
-      provider: "mock",
+      provider: this.name,
       label: "Fixture",
       testOnly: true,
       supportsCancellation: false,
+      supportsReferenceImage: true,
+      maxReferenceImages: this.name === "seedance" ? 1 : 8,
       acceptedAssetTypes: [],
       models: []
     };
@@ -801,8 +1399,9 @@ class ScriptedProvider implements SeedanceProvider {
     return { ok: true, value: {} };
   }
 
-  async createTask(): Promise<ProviderTaskSnapshot> {
+  async createTask(input: CreateTaskInput): Promise<ProviderTaskSnapshot> {
     this.createCalls += 1;
+    this.lastCreateInput = input;
     if (this.createError !== undefined) throw this.createError;
     this.createdTaskId = "provider-task-1";
     return processingSnapshot("queued");

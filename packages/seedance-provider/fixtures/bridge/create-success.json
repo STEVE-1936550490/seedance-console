@@ -1,3 +1,11 @@
 {
-  "id": "fixture-provider-task-1"
+  "id": "fixture-provider-task-1",
+  "audit": {
+    "bridgeRequestId": "bridge-request-success",
+    "requestStartedAt": "2026-08-02T14:50:34.783+00:00",
+    "requestEndedAt": "2026-08-02T14:50:47.018+00:00",
+    "requestBodySent": true,
+    "providerHttpStatus": 200,
+    "providerRequestId": "provider-request-success"
+  }
 }

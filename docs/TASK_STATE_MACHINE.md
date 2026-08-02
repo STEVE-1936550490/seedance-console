@@ -38,7 +38,8 @@ stateDiagram-v2
   PROCESSING --> SUCCEEDED: 产物保存完成
   PROCESSING --> FAILED: Provider 或本地永久失败
   PROCESSING --> CANCELLED: Provider 确认取消
-  PROCESSING --> EXPIRED: Provider 任务或本地期限已过
+  PROCESSING --> EXPIRED: Provider 明确报告过期
+  PROCESSING --> RECONCILIATION_REQUIRED: 本地轮询期限已过但远端终态未知
 ```
 
 除图中流转外，其余更新均拒绝。终态不允许转出；“重试失败任务”应创建新任务，并用可选的 `retryOfTaskId` 关联，而不是复活原任务。
@@ -51,13 +52,20 @@ stateDiagram-v2
 - `progress` 是可选的 `0..100` 展示值；只有 Provider 明确返回且适配器可可靠映射时才更新，不根据耗时猜测。
 - `errorCode` 使用稳定内部代码，`errorMessage` 为脱敏后的用户可读信息；原始异常只进入受控结构化日志。
 - Worker 为终态任务收到重复 Job 时应无操作成功。
+- EOS 临时素材只有在 `providerAssetCleanupReadyAt` 已由同一终态事务写入后才允许删除；
+  仅凭本地状态名称或后台扫描不得推断可清理。
 
 ## 5. 创建请求结果不明
 
-若创建 Provider 任务时连接超时，不能据此判断创建失败。任务保持 `SUBMITTING`，记录 `PROVIDER_CREATE_OUTCOME_UNKNOWN` 事件：
+若创建 Provider 任务时读取响应超时，不能据此判断创建失败。任务进入
+`RECONCILIATION_REQUIRED`，记录 `PROVIDER_CREATE_OUTCOME_UNKNOWN` 事件：
 
 - Provider 明确支持幂等键或按客户端请求 ID 查询时，按文档协调。
 - Provider 不支持上述能力时，不自动重发创建请求，避免重复计费和重复生成；等待人工处理或明确的超时策略。
+- 保留 `PublishedProviderAsset` 及 EOS 临时对象；即使预签名 URL 已过期也不自动清理，必须先完成人工对账。
+- 只有已确认请求未发送或收到明确拒绝时，才能标记 `NOT_CREATED` 并清理 EOS 对象。
+- 已获得 providerTaskId 后，在远端明确终态前不得清理；成功任务必须在输出下载、持久化
+  和校验全部提交后再开放清理门禁。
 - Mock Provider 必须支持客户端请求 ID 幂等，以验证恢复流程。
 
 具体策略在拿到 `docs/provider-api.md` 后确认。

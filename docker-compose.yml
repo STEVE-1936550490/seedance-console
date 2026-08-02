@@ -84,6 +84,13 @@ services:
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-10485760}
       SEEDANCE_PROVIDER: ${SEEDANCE_PROVIDER:-mock}
       SEEDANCE_MODEL_ID: ${SEEDANCE_MODEL_ID:-}
+      ASSET_PUBLISHER: ${ASSET_PUBLISHER:-hmac}
+      SEEDANCE_ASSET_SIGNING_KEY: ${SEEDANCE_ASSET_SIGNING_KEY:-}
+      SEEDANCE_ASSET_PUBLIC_BASE_URL: ${SEEDANCE_ASSET_PUBLIC_BASE_URL:-}
+      SEEDANCE_ASSET_URL_TTL_MS: ${SEEDANCE_ASSET_URL_TTL_MS:-}
+      SEEDANCE_ASSET_MAX_BYTES: ${SEEDANCE_ASSET_MAX_BYTES:-10485760}
+      APP_VIDEO_MAX_BYTES: ${APP_VIDEO_MAX_BYTES:-10485760}
+      FFPROBE_PATH: ${FFPROBE_PATH:-ffprobe}
     ports:
       - "127.0.0.1:${API_PORT:-43171}:43171"
     volumes:
@@ -113,6 +120,9 @@ services:
       context: .
       target: worker
     restart: unless-stopped
+    env_file:
+      - path: ${SEEDANCE_BRIDGE_ENV_FILE:-/etc/seedance-console/bridge.env}
+        required: true
     environment:
       <<: *app-environment
       WORKER_HOST: 0.0.0.0
@@ -121,8 +131,10 @@ services:
       WORKER_HEARTBEAT_TTL_SECONDS: 15
       SEEDANCE_PROVIDER: ${SEEDANCE_PROVIDER:-mock}
       SEEDANCE_MODEL_ID: ${SEEDANCE_MODEL_ID:-}
+      ASSET_PUBLISHER: ${ASSET_PUBLISHER:-hmac}
       SEEDANCE_REQUEST_TIMEOUT_MS: ${SEEDANCE_REQUEST_TIMEOUT_MS:-}
       SEEDANCE_POLL_INTERVAL_MS: ${SEEDANCE_POLL_INTERVAL_MS:-}
+      SEEDANCE_MAX_POLL_INTERVAL_MS: ${SEEDANCE_MAX_POLL_INTERVAL_MS:-}
       SEEDANCE_MAX_POLL_DURATION_MS: ${SEEDANCE_MAX_POLL_DURATION_MS:-}
       SEEDANCE_DOWNLOAD_TIMEOUT_MS: ${SEEDANCE_DOWNLOAD_TIMEOUT_MS:-}
       SEEDANCE_DOWNLOAD_MAX_BYTES: ${SEEDANCE_DOWNLOAD_MAX_BYTES:-536870912}
@@ -131,8 +143,22 @@ services:
       SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS: ${SEEDANCE_DOWNLOAD_MAX_RETRY_INTERVAL_MS:-30000}
       SEEDANCE_MAX_DOWNLOAD_DURATION_MS: ${SEEDANCE_MAX_DOWNLOAD_DURATION_MS:-600000}
       SEEDANCE_BRIDGE_URL: ${SEEDANCE_BRIDGE_URL:-}
-      SEEDANCE_BRIDGE_TOKEN: ${SEEDANCE_BRIDGE_TOKEN:-}
       REAL_API_TEST: ${REAL_API_TEST:-false}
+      SEEDANCE_ASSET_SIGNING_KEY: ${SEEDANCE_ASSET_SIGNING_KEY:-}
+      SEEDANCE_ASSET_PUBLIC_BASE_URL: ${SEEDANCE_ASSET_PUBLIC_BASE_URL:-}
+      SEEDANCE_ASSET_URL_TTL_MS: ${SEEDANCE_ASSET_URL_TTL_MS:-}
+      SEEDANCE_ASSET_MAX_BYTES: ${SEEDANCE_ASSET_MAX_BYTES:-10485760}
+      APP_VIDEO_MAX_BYTES: ${APP_VIDEO_MAX_BYTES:-10485760}
+      FFPROBE_PATH: ${FFPROBE_PATH:-ffprobe}
+      EOS_ENDPOINT: ${EOS_ENDPOINT:-}
+      EOS_REGION: ${EOS_REGION:-}
+      EOS_BUCKET: ${EOS_BUCKET:-}
+      EOS_ACCESS_KEY_ID: ${EOS_ACCESS_KEY_ID:-}
+      EOS_SECRET_ACCESS_KEY: ${EOS_SECRET_ACCESS_KEY:-}
+      EOS_OBJECT_PREFIX: ${EOS_OBJECT_PREFIX:-seedance-inputs/}
+      EOS_PRESIGN_TTL_SECONDS: ${EOS_PRESIGN_TTL_SECONDS:-3600}
+      EOS_FORCE_PATH_STYLE: ${EOS_FORCE_PATH_STYLE:-false}
+      EOS_DELETE_ON_TERMINAL: ${EOS_DELETE_ON_TERMINAL:-true}
     ports:
       - "127.0.0.1:${WORKER_PORT:-43172}:43172"
     volumes:
@@ -156,6 +182,45 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+
+  provider-bridge:
+    profiles: ["seedance"]
+    build:
+      context: .
+      dockerfile: services/provider-bridge/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ${SEEDANCE_PROVIDER_ENV_FILE:-/etc/seedance-console/provider.env}
+        required: true
+      - path: ${SEEDANCE_BRIDGE_ENV_FILE:-/etc/seedance-console/bridge.env}
+        required: true
+    environment:
+      BRIDGE_HOST: 0.0.0.0
+      BRIDGE_PORT: 43173
+      AICC_PUBLIC_KEY_PATH: /var/lib/seedance-bridge/keys/seedance_pub.pem
+      AICC_PRIVATE_KEY_PATH: /var/lib/seedance-bridge/keys/seedance_priv.pem
+      BRIDGE_REGISTRY_PATH: /var/lib/seedance-bridge/registry/submissions.sqlite3
+      BRIDGE_TEMP_ROOT: /var/lib/seedance-bridge/tmp
+      SEEDANCE_PROVIDER: ${SEEDANCE_PROVIDER:-mock}
+      REAL_API_TEST: ${REAL_API_TEST:-false}
+      AICC_BASE_URL: ${AICC_BASE_URL:-}
+      AICC_REQUEST_TIMEOUT_SECONDS: ${AICC_REQUEST_TIMEOUT_SECONDS:-120}
+    volumes:
+      - provider-bridge-keys:/var/lib/seedance-bridge/keys
+      - provider-bridge-registry:/var/lib/seedance-bridge/registry
+      - provider-bridge-tmp:/var/lib/seedance-bridge/tmp
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,urllib.request; request=urllib.request.Request('http://127.0.0.1:43173/health',headers={'Authorization':'Bearer '+os.environ['SEEDANCE_BRIDGE_TOKEN']}); assert urllib.request.urlopen(request,timeout=3).status == 200"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   web:
     build:
@@ -189,3 +254,6 @@ volumes:
   postgres-data:
   redis-data:
   app-storage:
+  provider-bridge-keys:
+  provider-bridge-registry:
+  provider-bridge-tmp:

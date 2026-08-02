@@ -2,8 +2,8 @@
 
 ## 1. 使用方式
 
-本清单用于继续向接口文档、平台页面或服务商逐项取证。纯文生视频最小闭环已经由
-唯一真实 Demo 验证；未勾选项代表扩展能力或正式协议证据仍缺失，不表示 AICC
+本清单用于继续向接口文档、平台页面或服务商逐项取证。纯文生视频和单参考图最小闭环
+已经由真实 Demo 验证；未勾选项代表扩展能力或正式协议证据仍缺失，不表示 AICC
 Bridge、真实创建、轮询或下载尚未实现。不要填写或截图真实 API Key、
 Authorization、私钥、完整敏感提示词、完整素材内容或仍有效的签名下载 URL。
 
@@ -21,10 +21,10 @@ Authorization、私钥、完整敏感提示词、完整素材内容或仍有效�
 
 ## 2. 接口与身份认证
 
-- [x] 唯一真实 Demo 确认当前 AICC Base URL 必须包含 `/api/v3`；`TODO_CONFIRM` 测试/生产环境、区域差异和版本策略。
+- [x] 真实 Demo 确认当前 AICC Base URL 必须包含 `/api/v3`；`TODO_CONFIRM` 测试/生产环境、区域差异和版本策略。
 - [x] SDK 源码使用 Bearer API Key；`TODO_CONFIRM` 官方鉴权文档、Key 权限、轮换和过期规则。
 - [ ] `TODO_CONFIRM` 是否要求项目 ID、租户 ID、签名 Header、固定出口 IP、代理或自定义 CA。
-- [x] 唯一真实 Demo 使用 `doubao-seedance-2.0`，模型映射返回 200 且 endpoint 有效；`TODO_CONFIRM` 长期权限和版本退役策略。
+- [x] 真实 Demo 使用 `doubao-seedance-2.0`，模型映射返回 200 且 endpoint 有效；`TODO_CONFIRM` 长期权限和版本退役策略。
 - [x] SDK 使用 `POST /mapping/query` 查询模型映射；`TODO_CONFIRM` 响应完整 schema 和失败策略。
 - [ ] `TODO_CONFIRM` 无 Python SDK 的普通 HTTP 调用是否被官方支持。
 - [ ] `TODO_CONFIRM` 若支持直接 HTTP，提供完整 AICC/机密通道协议或官方兼容库。
@@ -35,12 +35,14 @@ Authorization、私钥、完整敏感提示词、完整素材内容或仍有效�
 
 - [x] SDK 使用 `POST /contents/generations/tasks`；`TODO_CONFIRM` 正式请求/响应 schema。
 - [x] demo 展示 `content`、`generate_audio`、`ratio`、`duration`、`watermark`；`TODO_CONFIRM` 必填性、默认值和约束。
-- [x] 唯一真实 Demo 已验证纯文生视频最小请求和顶层非空 `id` 成功响应；`TODO_CONFIRM` 正式完整 schema。
-- [ ] `TODO_CONFIRM` 图生视频的最小请求和脱敏成功响应。
+- [x] 纯文真实 Demo 已验证最小请求和顶层非空 `id` 成功响应；`TODO_CONFIRM` 正式完整 schema。
+- [x] 单张 JPEG 图生视频已完成一次最小请求和脱敏成功链路；`TODO_CONFIRM` 正式 schema
+      与其他图片参数范围。
 - [ ] `TODO_CONFIRM` 提示词长度、语言、负向提示词和内容组合规则。
 - [ ] `TODO_CONFIRM` 分辨率、比例、时长、帧率字段名、类型、单位、范围和枚举。
-- [ ] `TODO_CONFIRM` 是否支持首帧、尾帧、多参考图、参考视频和参考音频，以及角色/顺序语义。
-- [x] 唯一真实 Demo 验证 HTTP 200 顶层 `id`；`TODO_CONFIRM` 其他成功状态和完整约束。
+- [x] SDK 1.0.0 确认单参考视频使用 `video_url.url`、`reference_video`，并自动加入
+      `Input-Has-Video: true`；首尾帧、多视频和组合语义仍 `TODO_CONFIRM`。
+- [x] 真实 Demo 验证 HTTP 200 顶层 `id`；`TODO_CONFIRM` 其他成功状态和完整约束。
 - [ ] `TODO_CONFIRM` 是否支持幂等键或按客户端请求 ID 查询，及超时后的安全恢复方式。
 
 需要的证据：官方参数表；纯文生视频和图生视频各一份脱敏请求/响应；参数校验失败样例；幂等说明。
@@ -48,11 +50,16 @@ Authorization、私钥、完整敏感提示词、完整素材内容或仍有效�
 ## 4. 素材提交
 
 - [x] demo 只展示图片、视频和音频 URL。
+- [x] Console 已实现单张 PNG/JPEG 的 EOS 预签名发布及 fixture E2E，并完成一次真实
+      JPEG Provider 拉取与图生视频验收；这不扩展为其他格式、数量或组合的协议保证。
+- [x] Console 已实现单段 MP4 的本地 ffprobe 校验、私有 EOS 发布、限时 GET URL、
+      `video_url/reference_video` 映射和终态清理；真实视频生视频尚未授权或执行。
 - [ ] `TODO_CONFIRM` URL 是否必须公网可访问，是否支持短期签名 URL 和允许的协议/host。
 - [ ] `TODO_CONFIRM` 是否支持 Base64、`file_id`、multipart 或独立上传接口。
 - [ ] `TODO_CONFIRM` 私有对象存储的授权方式和 URL 最短有效期。
 - [ ] `TODO_CONFIRM` 图片格式、MIME、大小、分辨率和数量限制。
-- [ ] `TODO_CONFIRM` 视频格式、编码、大小、分辨率、帧率、时长和数量限制。
+- [ ] 公开资料可参考 MP4/MOV、单段 2–15 秒、总长不超过 15 秒、最多 3 段及
+      480p/720p/1080p/4K；当前 AICC 租户正式限制、编码、大小和帧率仍 `TODO_CONFIRM`。
 - [ ] `TODO_CONFIRM` 音频格式、编码、大小、采样率、声道、时长和数量限制。
 
 需要的证据：素材规范页面截图或文档；独立上传接口说明；各素材类型的脱敏有效/无效请求样例。
@@ -63,7 +70,7 @@ Authorization、私钥、完整敏感提示词、完整素材内容或仍有效�
 - [x] 源码/示例出现 `pending`、`queued`、`running`、`succeeded`、`failed`。
 - [ ] `TODO_CONFIRM` 完整状态集合、大小写、含义、终态和允许流转。
 - [ ] `TODO_CONFIRM` 查询频率、推荐轮询间隔、最长处理时间、404 和任务过期语义。
-- [x] 唯一真实 Demo 已验证处理中和成功响应；`TODO_CONFIRM` 普通失败与审核失败响应。
+- [x] 真实 Demo 已验证处理中和成功响应；`TODO_CONFIRM` 普通失败与审核失败响应。
 - [x] SDK 提供 `DELETE /contents/generations/tasks/{task_id}`。
 - [ ] `TODO_CONFIRM` DELETE 是删除还是取消、允许状态、重复调用、竞态和最终状态。
 - [ ] `TODO_CONFIRM` 取消是否收费、是否保留输出、任务成功与取消同时发生时如何判定。
@@ -75,7 +82,7 @@ Authorization、私钥、完整敏感提示词、完整素材内容或仍有效�
 
 - [x] SDK 查询成功后读取 `content.video_url`。
 - [x] SDK 对视频 URL 发起流式 GET，且可解密带 `x-tos-meta-enc-dek` 的文件。
-- [x] 唯一真实 Demo 已验证 `content.video_url`、SDK 下载/解密和 MP4 输出；`TODO_CONFIRM` 完整媒体元数据与多输出语义。
+- [x] 真实 Demo 已验证 `content.video_url`、SDK 下载/解密和 MP4 输出；`TODO_CONFIRM` 完整媒体元数据与多输出语义。
 - [ ] `TODO_CONFIRM` 视频 URL 是否需要 API 鉴权或仅依赖签名，允许 host 和重定向规则。
 - [ ] `TODO_CONFIRM` 视频 URL 有效期、刷新方式和任务记录保留期。
 - [ ] `TODO_CONFIRM` 下载 Content-Type、Content-Length、最大文件大小、校验和与 Range 支持。

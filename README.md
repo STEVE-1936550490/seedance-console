@@ -10,8 +10,10 @@ Mock 工作流和受双重门保护的 Seedance AICC Python Bridge；日常运�
 
 - Mock MVP：已完成 Ubuntu 24.04 Docker 端到端验收。
 - AICC Bridge：已完成固定 SDK、机密通道、创建、查询、下载/解密和安全日志边界。
-- 唯一真实 Demo：已完成 `create → poll → download → 本地持久化`，MP4 的 Web
-  播放和下载均通过。
+- 真实 Demo：纯文生视频和单参考图图生视频均已完成
+  `create → poll → download → 本地持久化`，MP4 的 Web 播放和下载均通过。
+- 参考图片发布：支持私有 EOS/S3 上传和限时 GET 预签名 URL，也保留自建 HMAC 回滚
+  实现；真实单参考图链路已完成一次验收。
 - 默认运行状态：`SEEDANCE_PROVIDER=mock`、`REAL_API_TEST=false`；真实创建门关闭
   时返回 403。
 
@@ -27,6 +29,8 @@ Mock 工作流和受双重门保护的 Seedance AICC Python Bridge；日常运�
 - [真实 Provider 待确认清单](docs/PROVIDER_PROTOCOL_CHECKLIST.md)
 - [Provider 版本化轮询实现](docs/POLLING_SCHEDULING.md)
 - [真实 Provider 分阶段实施完成记录](docs/REAL_PROVIDER_IMPLEMENTATION_PLAN.md)
+- [Provider 参考图片安全发布](docs/ASSET_PUBLISHING.md)
+- [单参考视频 MVP](docs/REFERENCE_VIDEO_MVP.md)
 
 ## Linux Docker 启动
 
@@ -106,6 +110,10 @@ pnpm check:client-secrets
 `QUEUED → SUBMITTING → PROCESSING → SUCCEEDED` 状态流转、本地 Storage、Provider
 capabilities 和 MP4 预览响应。
 
+EOS 发布器单元测试使用完全本地的 SDK mock，不访问真实对象存储。2026-08-02 已在部署
+环境运行 `pnpm eos:verify`，完成上传、5 分钟 GET URL 校验和删除闭环；脚本可用于后续
+凭据或 Bucket 配置变更后的复验。
+
 可在装有 Docker 的环境额外检查：
 
 ```bash
@@ -129,9 +137,9 @@ docker compose down -v
 
 ## 真实 Provider 状态
 
-真实 Seedance AICC 路径已经通过一次纯文生视频任务完成验收，包括真实创建、版本化
-轮询、SDK 下载/解密、本地 MP4 持久化以及 Web 播放下载。部署根因验证同时确认
-`AICC_BASE_URL` 必须包含 `/api/v3`。
+真实 Seedance AICC 路径已经分别通过一次纯文生视频和一次单参考图图生视频任务完成
+验收，包括真实创建、版本化轮询、SDK 下载/解密、本地 MP4 持久化以及 Web 播放下载。
+部署根因验证同时确认 `AICC_BASE_URL` 必须包含 `/api/v3`。
 
 当前仍必须保持：
 
@@ -140,10 +148,12 @@ SEEDANCE_PROVIDER=mock
 REAL_API_TEST=false
 ```
 
-真实 create 同时要求用户对当次调用明确授权和 `REAL_API_TEST=true`。唯一真实 Demo
-完成后门禁已关闭并复验返回 403，不得重复创建。未确认的参考素材组合、远端取消、
-用量/费用、正式错误码和远端幂等能力继续以 `docs/provider-api.md` 中的
-`TODO_CONFIRM` 为准。
+真实 create 同时要求用户对当次调用明确授权和 `REAL_API_TEST=true`。已完成的真实 Demo
+不得重复创建，后续任务仍需新的明确授权。当前已实现一张 PNG/JPEG 经私有 EOS
+上传及短期 GET 预签名 URL 的发布流程，无需服务器公网 HTTPS 入口；EOS 上传、读取和
+删除闭环及一次真实 Provider 拉取均已验收，但在新的单次授权前不得再次执行真实任务。
+未确认的素材限制和组合、远端取消、用量/费用、正式错误码和远端幂等能力继续以
+`docs/provider-api.md` 中的 `TODO_CONFIRM` 为准。
 
 ## 工作区
 
